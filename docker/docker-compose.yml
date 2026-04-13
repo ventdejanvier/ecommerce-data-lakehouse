@@ -1,0 +1,173 @@
+services:
+  # --- STORAGE LAYER ---
+  minio:
+    image: public.ecr.aws/bitnami/minio:latest
+    container_name: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    environment:
+      - MINIO_ROOT_USER=admin
+      - MINIO_ROOT_PASSWORD=password
+    volumes:
+      - ./persistence/minio_data:/data 
+    command: server /data --console-address ":9001"
+
+  postgres:
+    image: public.ecr.aws/docker/library/postgres:13-alpine
+    container_name: postgres
+    ports:
+      - "5432:5432"
+    environment:
+      - POSTGRES_USER=user
+      - POSTGRES_PASSWORD=password
+      - POSTGRES_DB=data_lakehouse
+    volumes:
+      - ./persistence/postgres_data:/var/lib/postgresql/data
+
+  # --- STREAMING LAYER ---
+  zookeeper:
+    image: public.ecr.aws/bitnami/zookeeper:3.8
+    container_name: zookeeper
+    environment:
+      - ALLOW_ANONYMOUS_LOGIN=yes
+
+  kafka:
+    image: public.ecr.aws/bitnami/kafka:3.3
+    container_name: kafka
+    depends_on:
+      - zookeeper
+    environment:
+      - KAFKA_CFG_ZOOKEEPER_CONNECT=zookeeper:2181
+      - ALLOW_ANONYMOUS_LOGIN=yes
+      - KAFKA_CFG_ADVERTISED_LISTENERS=PLAINTEXT://kafka:9092
+    ports:
+      - "9092:9092"
+
+  # --- PROCESSING LAYER (SPARK) ---
+  spark-master:
+    image: public.ecr.aws/bitnami/spark:3.3
+    container_name: spark-master
+    environment:
+      - SPARK_MODE=master
+      - ALLOW_ANONYMOUS_LOGIN=yes
+    ports:
+      - "8080:8080"
+      - "7077:7077"
+
+  spark-worker:
+    image: public.ecr.aws/bitnami/spark:3.3
+    container_name: spark-worker
+    depends_on:
+      - spark-master
+    environment:
+      - SPARK_MODE=worker
+      - SPARK_MASTER_URL=spark://spark-master:7077
+      - SPARK_WORKER_MEMORY=2G
+      - ALLOW_ANONYMOUS_LOGIN=yes
+
+  # --- AIRFLOW (ORCHESTRATION) ---
+  airflow:
+    image: apache/airflow:2.7.1-python3.10
+    container_name: airflow-webserver
+    user: root
+    depends_on:
+      - postgres
+    environment:
+      # Cấu hình Database
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://user:password@postgres/data_lakehouse
+      - AIRFLOW__CORE__EXECUTOR=LocalExecutor
+      # Tắt các DAG mẫu cho sạch máy
+      - AIRFLOW__CORE__LOAD_EXAMPLES=False 
+      - _AIRFLOW_WWW_USER_USERNAME=admin
+      - _AIRFLOW_WWW_USER_PASSWORD=admin
+      - _AIRFLOW_WWW_USER_ROLE=Admin
+      - _AIRFLOW_WWW_USER_FIRSTNAME=Admin
+      - _AIRFLOW_WWW_USER_LASTNAME=Admin
+      - _AIRFLOW_WWW_USER_EMAIL=admin@example.com
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./dags:/opt/airflow/dags
+      - ./persistence/airflow_logs:/opt/airflow/logs 
+      - ./scripts:/opt/airflow/scripts 
+      - /var/run/docker.sock:/var/run/docker.sock
+    command: >
+      bash -c "airflow db init &&
+      airflow users create --username admin --password admin --firstname Admin --lastname Admin --role Admin --email admin@example.com || true &&
+      (airflow scheduler & airflow webserver)"
+
+  # --- HIVE METASTORE (Catalog cho Lakehouse) ---
+  # --- DATABASE CHO HIVE METASTORE (Dùng Postgres) ---
+  # --- DATABASE CHO HIVE METASTORE (Dùng MariaDB cho ổn định) ---
+  # --- DATABASE CHO HIVE METASTORE (Dùng MySQL 5.7 bản chuẩn) ---
+  metastore-db:
+    image: postgres:13-alpine
+    container_name: metastore-db
+    environment:
+      - POSTGRES_USER=hive
+      - POSTGRES_PASSWORD=hive
+      - POSTGRES_DB=metastore_db
+    ports:
+      - "5433:5432"
+    volumes:
+      - ./persistence/metastore_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hive -d metastore_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  # --- HIVE METASTORE (Bản chuẩn của Apache) ---
+  hive-metastore:
+    image: apache/hive:4.0.0-alpha-2
+    container_name: hive-metastore
+    user: root
+    depends_on:
+      metastore-db:
+        condition: service_healthy
+    command: /opt/hive/bin/hive --service metastore
+    environment:
+      - DB_DRIVER=org.postgresql.Driver
+      - METASTORE_DB_HOSTNAME=metastore-db
+      - SERVICE_OPTS=-Xmx1G
+      # Cấu hình file hive-site.xml ngay tại đây
+      - HIVE_METASTORE_DB_TYPE=postgres
+      - HIVE_METASTORE_JDBC_URL=jdbc:postgresql://metastore-db:5432/metastore_db
+      - HIVE_METASTORE_JDBC_USER=hive
+      - HIVE_METASTORE_JDBC_PASSWORD=hive
+      # MinIO/S3 Config
+      - AWS_ACCESS_KEY_ID=admin
+      - AWS_SECRET_ACCESS_KEY=password
+      - METASTORE_S3_ENDPOINT=http://minio:9000
+    ports:
+      - "9083:9083"
+
+  # --- TRINO (Query Engine siêu tốc) ---
+  trino:
+    image: trinodb/trino:411
+    container_name: trino
+    ports:
+      - "8082:8080" # Truy cập UI tại localhost:8082
+    volumes:
+      - ./trino/catalog:/etc/trino/catalog # Mount file cấu hình Delta
+    depends_on:
+      - hive-metastore
+
+  # --- DEVELOPMENT ENVIRONMENT ---
+  jupyter:
+    image: jupyter/pyspark-notebook:spark-3.3.0
+    container_name: jupyter-notebook
+    user: root
+    ports:
+      - "8888:8888"
+      - "4040:4040"
+    volumes:
+      - ./notebooks:/home/jovyan/work
+      - ./scripts:/home/jovyan/scripts
+      - ./data:/home/jovyan/data
+    environment:
+       - JUPYTER_ENABLE_LAB=yes 
+       - JUPYTER_TOKEN=""
+       - PYSPARK_SUBMIT_ARGS=--packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 pyspark-shell
+    command: start-notebook.sh --NotebookApp.token='' --NotebookApp.password=''

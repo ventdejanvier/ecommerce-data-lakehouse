@@ -1,0 +1,93 @@
+# ==========================================
+# 1. Data Files (NEVER commit data to Git!)
+# ==========================================
+*.csv
+*.tsv
+*.json
+*.parquet
+*.avro
+*.orc
+*.snappy
+*.gz
+*.zip
+data/
+datasets/
+dbfs/
+temp_data/
+
+# ==========================================
+# 2. Apache Spark & Delta Lake
+# ==========================================
+spark-warehouse/
+metastore_db/
+derby.log
+_delta_log/
+*.crc
+logs/spark*.log
+
+# ==========================================
+# 3. dbt (Data Build Tool)
+# ==========================================
+target/
+dbt_packages/
+dbt_modules/
+logs/dbt.log
+edr_target/
+
+# ==========================================
+# 4. Databricks (if applicable)
+# ==========================================
+.databricks/
+*.dbc
+
+# ==========================================
+# 5. Python & Virtual Environments
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+htmlcov/
+.tox/
+.coverage
+*.egg-info/
+dist/
+build/
+
+# Environments
+.env
+.venv/
+venv/
+env/
+ENV/
+
+# ==========================================
+# 6. Jupyter Notebooks
+# ==========================================
+.ipynb_checkpoints/
+*/.ipynb_checkpoints/
+
+# ==========================================
+# 7. Secrets & Cloud Credentials 
+# ==========================================
+# CRITICAL: Never commit keys or secrets
+*.pem
+*.key
+*.p12
+secrets/
+.aws/
+credentials*.json
+service-account*.json
+*.tfvars
+
+# ==========================================
+# 8. IDEs & OS Files
+# ==========================================
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+# Docker persistence and logs
+docker/persistence/
+docker/logs/
