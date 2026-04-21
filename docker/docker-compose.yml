@@ -17,7 +17,7 @@ services:
     image: public.ecr.aws/docker/library/postgres:13-alpine
     container_name: postgres
     ports:
-      - "5432:5432"
+      - "5434:5432"
     environment:
       - POSTGRES_USER=user
       - POSTGRES_PASSWORD=password
@@ -126,11 +126,12 @@ services:
     depends_on:
       metastore-db:
         condition: service_healthy
-    command: /opt/hive/bin/hive --service metastore
+    #command: /opt/hive/bin/hive --service metastore
     environment:
-      - DB_DRIVER=org.postgresql.Driver
+      - SERVICE_NAME=metastore
+      - DB_DRIVER=postgres
       - METASTORE_DB_HOSTNAME=metastore-db
-      - SERVICE_OPTS=-Xmx1G
+      - SERVICE_OPTS=-Xmx1G -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://metastore-db:5432/metastore_db -Djavax.jdo.option.ConnectionUserName=hive -Djavax.jdo.option.ConnectionPassword=hive
       # Cấu hình file hive-site.xml ngay tại đây
       - HIVE_METASTORE_DB_TYPE=postgres
       - HIVE_METASTORE_JDBC_URL=jdbc:postgresql://metastore-db:5432/metastore_db
