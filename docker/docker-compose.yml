@@ -167,8 +167,10 @@ services:
       - ./notebooks:/home/jovyan/work
       - ./scripts:/home/jovyan/scripts
       - ./data:/home/jovyan/data
+      - ./persistence/minio_data:/home/jovyan/minio_raw
     environment:
        - JUPYTER_ENABLE_LAB=yes 
        - JUPYTER_TOKEN=""
        - PYSPARK_SUBMIT_ARGS=--packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 pyspark-shell
+       - PYSPARK_SUBMIT_ARGS=--packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=admin --conf spark.hadoop.fs.s3a.secret.key=password --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem --conf spark.sql.catalogImplementation=hive --conf hive.metastore.uris=thrift://hive-metastore:9083 pyspark-shell
     command: start-notebook.sh --NotebookApp.token='' --NotebookApp.password=''

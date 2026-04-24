@@ -1,5 +1,6 @@
 from airflow import DAG
 from airflow.operators.bash import BashOperator
+from airflow.operators.trigger_dagrun import TriggerDagRunOperator 
 from datetime import datetime, timedelta
 
 default_args = {
@@ -21,3 +22,11 @@ run_gold = BashOperator(
     bash_command='docker exec -u root jupyter-notebook spark-submit --packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 /home/jovyan/scripts/transform_silver_to_gold.py',
     dag=dag
 )
+
+trigger_analytics = TriggerDagRunOperator(
+    task_id='trigger_user_analytics',
+    trigger_dag_id='user_analytics_dag',  
+    dag=dag
+)
+
+run_gold >> trigger_analytics

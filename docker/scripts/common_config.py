@@ -15,4 +15,5 @@ def get_spark_session(app_name):
         .config("spark.sql.catalogImplementation", "hive") \
         .config("hive.metastore.uris", "thrift://hive-metastore:9083") \
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")\
+        .enableHiveSupport() \
         .getOrCreate()
