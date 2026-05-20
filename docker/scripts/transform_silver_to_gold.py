@@ -18,7 +18,6 @@ def transform_gold():
     )
  
     # dim_products sẽ là bảng dimension chính cho sản phẩm, chứa thông tin hiển thị và phân loại
-    # ---------------------------------------------------------
     split_col = F.split(df_silver['category_fixed'], '\.')
     
     dim_products = df_silver.select("product_id", "brand_fixed", "category_fixed").distinct() \

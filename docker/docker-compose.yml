@@ -141,6 +141,12 @@ services:
       - AWS_ACCESS_KEY_ID=admin
       - AWS_SECRET_ACCESS_KEY=password
       - METASTORE_S3_ENDPOINT=http://minio:9000
+    healthcheck:
+      test: ["CMD-SHELL", "grep -q '237B' /proc/net/tcp || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
     ports:
       - "9083:9083"
 
@@ -171,6 +177,8 @@ services:
     environment:
        - JUPYTER_ENABLE_LAB=yes 
        - JUPYTER_TOKEN=""
-       - PYSPARK_SUBMIT_ARGS=--packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 pyspark-shell
        - PYSPARK_SUBMIT_ARGS=--packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=admin --conf spark.hadoop.fs.s3a.secret.key=password --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem --conf spark.sql.catalogImplementation=hive --conf hive.metastore.uris=thrift://hive-metastore:9083 pyspark-shell
     command: start-notebook.sh --NotebookApp.token='' --NotebookApp.password=''
+    depends_on:
+      hive-metastore:
+        condition: service_started
