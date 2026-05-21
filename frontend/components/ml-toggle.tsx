@@ -18,7 +18,7 @@ export function MLToggle() {
     toggleAi();
     toast({
       title: checked
-        ? '✨ AI Egoist Mode Activated! Searching behavior cluster...'
+        ? '✨ AI Mode Activated! Searching behavior cluster...'
         : 'Switched back to general trending products.',
     });
   };
