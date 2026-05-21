@@ -4,11 +4,11 @@ from pyspark.sql.window import Window
 sys.path.append('/home/jovyan/scripts')
 from common_config import get_spark_session
 
-def export_to_postgres(df):
+def export_to_postgres(df, table_name: str):
     df.write \
         .format("jdbc") \
         .option("url", "jdbc:postgresql://postgres:5432/data_lakehouse") \
-        .option("dbtable", "serving_recommendations") \
+        .option("dbtable", table_name) \
         .option("user", "user") \
         .option("password", "password") \
         .option("driver", "org.postgresql.Driver") \
@@ -44,7 +44,8 @@ def generate_cluster_recs():
         .option("path", "s3a://gold/recommendations_by_cluster") \
         .saveAsTable("gold_db.recommendations_by_cluster")
 
-    export_to_postgres(final_cluster_recs)
+    export_to_postgres(final_cluster_recs, "serving_recommendations")
+    export_to_postgres(clusters, "serving_user_clusters")
 
     print("SUCCESS: Đã kết nối K-Means với Hệ gợi ý thành công!")
 
