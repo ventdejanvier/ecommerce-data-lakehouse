@@ -1,14 +1,16 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ProductCard, Product } from './product-card';
 import { SearchBar } from './search-bar';
 import { CategoryFilters } from './category-filters';
-import { Sparkles, Grid3X3, Loader2 } from 'lucide-react';
-import { useMLStore } from '@/lib/ml-store';
+import { Sparkles, Grid3X3 } from 'lucide-react';
+import { type AIRecommendation, useMLStore } from '@/lib/ml-store';
+import { useAuthStore } from '@/lib/auth-store';
+import { useToast } from '@/hooks/use-toast';
 import { Switch } from '@/components/ui/switch';
-import { logEvent } from '@/lib/tracking';
+import { Skeleton } from '@/components/ui/skeleton';
 
 // Standard catalog products (8 items) - controlled by search/category filters
 const catalogProducts: Product[] = [
@@ -92,7 +94,7 @@ const catalogProducts: Product[] = [
   },
 ];
 
-// High-end recommendation products (4 items) - controlled by ML toggle
+// Default trending products shown when AI recommendations are unavailable.
 const recommendedProducts: Product[] = [
   {
     id: 'rec_001',
@@ -136,50 +138,6 @@ const recommendedProducts: Product[] = [
   },
 ];
 
-// Alternative ML recommendations (shuffled when toggle is switched)
-const altRecommendedProducts: Product[] = [
-  {
-    id: 'alt_001',
-    name: 'Mi Ultra Gaming Monitor 49"',
-    price: 1199.99,
-    originalPrice: 1399.99,
-    rating: 4.8,
-    reviewCount: 234,
-    category: 'Monitors',
-    inStock: true,
-  },
-  {
-    id: 'alt_002',
-    name: 'Xiaomi Gaming Chair Pro',
-    price: 449.99,
-    originalPrice: 549.99,
-    rating: 4.6,
-    reviewCount: 789,
-    category: 'Gaming',
-    inStock: true,
-  },
-  {
-    id: 'alt_003',
-    name: 'RedmiBook Air 14 OLED',
-    price: 1099.99,
-    originalPrice: 1299.99,
-    rating: 4.7,
-    reviewCount: 345,
-    category: 'Laptops',
-    inStock: true,
-  },
-  {
-    id: 'alt_004',
-    name: 'Xiaomi SoundBar Theater',
-    price: 299.99,
-    originalPrice: 379.99,
-    rating: 4.8,
-    reviewCount: 678,
-    category: 'Audio',
-    inStock: true,
-  },
-];
-
 interface ProductGridProps {
   onProductClick?: (product: Product) => void;
   onAddToCart?: (product: Product) => void;
@@ -187,6 +145,21 @@ interface ProductGridProps {
   activeCategory: string;
   onSearch: (query: string) => void;
   onCategoryChange: (categoryId: string) => void;
+}
+
+function mapRecommendationToProduct(
+  recommendation: AIRecommendation,
+  index: number
+): Product {
+  const fallbackProduct = recommendedProducts[index % recommendedProducts.length];
+
+  return {
+    ...fallbackProduct,
+    id: `ai_${recommendation.product_id}`,
+    name: recommendation.display_name,
+    reviewCount: Math.max(1, Math.round(recommendation.cluster_total_score)),
+    category: 'Recommended',
+  };
 }
 
 export function ProductGrid({ 
@@ -197,10 +170,22 @@ export function ProductGrid({
   onSearch,
   onCategoryChange,
 }: ProductGridProps) {
-  const { isMLEnabled, toggleML } = useMLStore();
-  const [isLoadingRecs, setIsLoadingRecs] = useState(false);
-  const [currentRecs, setCurrentRecs] = useState(recommendedProducts);
-  const [recVersion, setRecVersion] = useState(0);
+  const {
+    isAiEnabled,
+    aiRecommendations,
+    isLoading,
+    toggleAi,
+    setMLEnabled,
+    setRecommendations,
+    setLoading,
+  } = useMLStore();
+  const user = useAuthStore((state) => state.user);
+  const { toast } = useToast();
+  const userId = user?.id;
+  const hasAiRecommendations = isAiEnabled && aiRecommendations.length > 0;
+  const displayedRecommendations = hasAiRecommendations
+    ? aiRecommendations.map(mapRecommendationToProduct)
+    : recommendedProducts;
   
   // Filter catalog products based on search and category
   const filteredCatalog = catalogProducts.filter((product) => {
@@ -214,20 +199,92 @@ export function ProductGrid({
     return matchesSearch && matchesCategory;
   });
 
-  // Handle ML toggle with loading animation
-  const handleMLToggle = () => {
-    setIsLoadingRecs(true);
-    toggleML();
-    
-    // Simulate API call for new recommendations
-    setTimeout(() => {
-      // Alternate between recommendation sets
-      setRecVersion((prev) => prev + 1);
-      setCurrentRecs((prev) => 
-        prev === recommendedProducts ? altRecommendedProducts : recommendedProducts
-      );
-      setIsLoadingRecs(false);
-    }, 1000);
+  useEffect(() => {
+    if (!isAiEnabled || aiRecommendations.length > 0) {
+      return;
+    }
+
+    const abortController = new AbortController();
+
+    async function fetchRecommendations() {
+      if (!userId) {
+        toast({
+          title: 'Collecting more user behavior to personalize. Falling back to trending.',
+        });
+        setMLEnabled(false);
+        setLoading(false);
+        return;
+      }
+
+      setLoading(true);
+
+      try {
+        const response = await fetch(
+          `http://localhost:8000/api/recommendations/${encodeURIComponent(userId)}`,
+          { signal: abortController.signal }
+        );
+
+        if (!response.ok) {
+          throw new Error(`Recommendation request failed: ${response.status}`);
+        }
+
+        const data = (await response.json()) as AIRecommendation[];
+
+        if (data.length === 0) {
+          toast({
+            title: 'Collecting more user behavior to personalize. Falling back to trending.',
+          });
+          setRecommendations([]);
+          setMLEnabled(false);
+          return;
+        }
+
+        setRecommendations(data);
+      } catch (error) {
+        if (!abortController.signal.aborted) {
+          console.error(error);
+          toast({
+            title: 'Unable to load AI recommendations. Falling back to trending.',
+          });
+          setMLEnabled(false);
+        }
+      } finally {
+        if (!abortController.signal.aborted) {
+          setLoading(false);
+        }
+      }
+    }
+
+    void fetchRecommendations();
+
+    return () => {
+      abortController.abort();
+    };
+  }, [
+    aiRecommendations.length,
+    isAiEnabled,
+    setLoading,
+    setMLEnabled,
+    setRecommendations,
+    toast,
+    userId,
+  ]);
+
+  const handleAiToggle = (checked: boolean) => {
+    if (checked === isAiEnabled) {
+      return;
+    }
+
+    if (!checked) {
+      setLoading(false);
+    }
+
+    toggleAi();
+    toast({
+      title: checked
+        ? '✨ AI Egoist Mode Activated! Searching behavior cluster...'
+        : 'Switched back to general trending products.',
+    });
   };
 
   const containerVariants = {
@@ -258,7 +315,7 @@ export function ProductGrid({
           <div className="flex items-center gap-3">
             <div className="p-2 rounded-lg bg-primary/10">
               <Sparkles className={`h-5 w-5 transition-colors duration-300 ${
-                isMLEnabled ? 'text-primary' : 'text-muted-foreground'
+                isAiEnabled ? 'text-primary' : 'text-muted-foreground'
               }`} />
             </div>
             <div>
@@ -272,21 +329,21 @@ export function ProductGrid({
             <div className="flex items-center gap-2">
               <Sparkles 
                 className={`h-4 w-4 transition-colors duration-300 ${
-                  isMLEnabled ? 'text-primary' : 'text-muted-foreground'
+                  isAiEnabled ? 'text-primary' : 'text-muted-foreground'
                 }`} 
               />
               <span className="text-sm font-medium text-foreground">
-                ALS Model
+                K-Means Model
               </span>
             </div>
             
             <Switch
-              checked={isMLEnabled}
-              onCheckedChange={handleMLToggle}
+              checked={isAiEnabled}
+              onCheckedChange={handleAiToggle}
               className="data-[state=checked]:bg-primary"
             />
             
-            {isMLEnabled && !isLoadingRecs && (
+            {isAiEnabled && !isLoading && (
               <motion.span
                 initial={{ opacity: 0, scale: 0.8 }}
                 animate={{ opacity: 1, scale: 1 }}
@@ -301,31 +358,43 @@ export function ProductGrid({
         {/* Recommendations Grid with Loading State */}
         <div className="relative">
           <AnimatePresence mode="wait">
-            {isLoadingRecs ? (
+            {isLoading ? (
               <motion.div
                 key="loading"
                 initial={{ opacity: 0 }}
                 animate={{ opacity: 1 }}
                 exit={{ opacity: 0 }}
-                className="flex items-center justify-center py-20"
+                className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5"
               >
-                <div className="flex flex-col items-center gap-3">
-                  <Loader2 className="h-8 w-8 animate-spin text-primary" />
-                  <p className="text-sm text-muted-foreground">Updating recommendations...</p>
-                </div>
+                {Array.from({ length: 10 }).map((_, index) => (
+                  <div
+                    key={`recommendation-skeleton-${index}`}
+                    className="overflow-hidden rounded-xl bg-card border border-border"
+                  >
+                    <Skeleton className="aspect-square w-full rounded-none" />
+                    <div className="p-4 space-y-3">
+                      <Skeleton className="h-3 w-20" />
+                      <Skeleton className="h-10 w-full" />
+                      <Skeleton className="h-5 w-28" />
+                      <Skeleton className="h-6 w-24" />
+                      <Skeleton className="h-9 w-full rounded-lg" />
+                    </div>
+                  </div>
+                ))}
               </motion.div>
             ) : (
               <motion.div
-                key={`recs-${recVersion}`}
+                key={hasAiRecommendations ? 'ai-recommendations' : 'default-recommendations'}
                 variants={containerVariants}
                 initial="hidden"
                 animate="visible"
                 className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5"
               >
-                {currentRecs.map((product) => (
+                {displayedRecommendations.map((product) => (
                   <motion.div key={product.id} variants={itemVariants}>
                     <ProductCard
                       product={product}
+                      isAiPicked={hasAiRecommendations}
                       onProductClick={onProductClick}
                       onAddToCart={onAddToCart}
                     />

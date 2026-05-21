@@ -3,10 +3,25 @@
 import { motion } from 'framer-motion';
 import { Sparkles } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
+import { useToast } from '@/hooks/use-toast';
 import { useMLStore } from '@/lib/ml-store';
 
 export function MLToggle() {
-  const { isMLEnabled, toggleML } = useMLStore();
+  const { toast } = useToast();
+  const { isAiEnabled, toggleAi } = useMLStore();
+
+  const handleToggle = (checked: boolean) => {
+    if (checked === isAiEnabled) {
+      return;
+    }
+
+    toggleAi();
+    toast({
+      title: checked
+        ? '✨ AI Egoist Mode Activated! Searching behavior cluster...'
+        : 'Switched back to general trending products.',
+    });
+  };
 
   return (
     <motion.div
@@ -17,7 +32,7 @@ export function MLToggle() {
       <div className="flex items-center gap-2">
         <Sparkles 
           className={`h-4 w-4 transition-colors duration-300 ${
-            isMLEnabled ? 'text-amber-500' : 'text-muted-foreground'
+            isAiEnabled ? 'text-amber-500' : 'text-muted-foreground'
           }`} 
         />
         <span className="text-sm font-medium text-foreground">
@@ -26,12 +41,12 @@ export function MLToggle() {
       </div>
       
       <Switch
-        checked={isMLEnabled}
-        onCheckedChange={toggleML}
+        checked={isAiEnabled}
+        onCheckedChange={handleToggle}
         className="data-[state=checked]:bg-amber-500"
       />
       
-      {isMLEnabled && (
+      {isAiEnabled && (
         <motion.span
           initial={{ opacity: 0, scale: 0.8 }}
           animate={{ opacity: 1, scale: 1 }}

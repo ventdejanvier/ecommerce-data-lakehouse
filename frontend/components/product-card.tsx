@@ -2,7 +2,8 @@
 
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
-import { ShoppingCart, Star, TrendingUp, Smartphone, Laptop, Headphones, Watch, Monitor, Gamepad2 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { ShoppingCart, Star, TrendingUp, Smartphone, Laptop, Headphones, Watch, Monitor, Gamepad2, Sparkles } from 'lucide-react';
 import { logEvent } from '@/lib/tracking';
 import { useCartStore } from '@/lib/cart-store';
 
@@ -20,6 +21,7 @@ export interface Product {
 
 interface ProductCardProps {
   product: Product;
+  isAiPicked?: boolean;
   onProductClick?: (product: Product) => void;
   onAddToCart?: (product: Product) => void;
 }
@@ -31,9 +33,15 @@ const categoryIcons: Record<string, React.ElementType> = {
   Wearables: Watch,
   Monitors: Monitor,
   Gaming: Gamepad2,
+  Recommended: Sparkles,
 };
 
-export function ProductCard({ product, onProductClick, onAddToCart }: ProductCardProps) {
+export function ProductCard({
+  product,
+  isAiPicked = false,
+  onProductClick,
+  onAddToCart,
+}: ProductCardProps) {
   const { addItem, openCart } = useCartStore();
 
   const handleCardClick = () => {
@@ -129,6 +137,12 @@ export function ProductCard({ product, onProductClick, onAddToCart }: ProductCar
             </motion.span>
           )}
         </div>
+
+        {isAiPicked && (
+          <Badge className="absolute top-3 right-3 text-[10px] shadow-sm">
+            ✨ K-Means Pick
+          </Badge>
+        )}
 
         {/* Out of Stock Overlay */}
         {!product.inStock && (
