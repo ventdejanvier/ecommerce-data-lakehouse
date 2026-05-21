@@ -4,6 +4,17 @@ from pyspark.sql.window import Window
 sys.path.append('/home/jovyan/scripts')
 from common_config import get_spark_session
 
+def export_to_postgres(df):
+    df.write \
+        .format("jdbc") \
+        .option("url", "jdbc:postgresql://postgres:5432/data_lakehouse") \
+        .option("dbtable", "serving_recommendations") \
+        .option("user", "user") \
+        .option("password", "password") \
+        .option("driver", "org.postgresql.Driver") \
+        .mode("overwrite") \
+        .save()
+
 def generate_cluster_recs():
     spark = get_spark_session("KMeans_Recommendation_Link")
     
@@ -32,6 +43,8 @@ def generate_cluster_recs():
     final_cluster_recs.write.format("delta").mode("overwrite") \
         .option("path", "s3a://gold/recommendations_by_cluster") \
         .saveAsTable("gold_db.recommendations_by_cluster")
+
+    export_to_postgres(final_cluster_recs)
 
     print("SUCCESS: Đã kết nối K-Means với Hệ gợi ý thành công!")
 

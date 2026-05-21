@@ -8,5 +8,7 @@ dependencies = [
     "confluent-kafka>=2.14.0",
     "fastapi>=0.136.1",
     "pydantic>=2.13.3",
+    "psycopg2-binary>=2.9.11",
+    "sqlalchemy>=2.0.41",
     "uvicorn>=0.46.0",
 ]

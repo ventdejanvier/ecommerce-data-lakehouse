@@ -42,3 +42,10 @@ class TelemetryEvent(BaseModel):
 
     # Accept arbitrary event-specific fields (action, pageName, productId, etc.)
     model_config = ConfigDict(extra="allow")
+
+
+class RecommendationResponse(BaseModel):
+    cluster_id: int
+    product_id: int
+    display_name: str
+    cluster_total_score: float

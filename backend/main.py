@@ -1,14 +1,17 @@
+from typing import Any
+
 from fastapi import BackgroundTasks, FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
+from database import get_recommendations_from_db
 from kafka_producer import produce_event
-from schemas import TelemetryEvent
+from schemas import RecommendationResponse, TelemetryEvent
 
 app = FastAPI()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["http://localhost:3000"],
-    allow_methods=["POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["*"],
 )
 
@@ -24,3 +27,11 @@ async def track_event(
         "status": "accepted",
         "eventId": event.eventId,
     }
+
+
+@app.get(
+    "/api/recommendations/{user_id}",
+    response_model=list[RecommendationResponse],
+)
+def get_recommendations(user_id: str) -> list[dict[str, Any]]:
+    return get_recommendations_from_db(user_id)
