@@ -1,9 +1,15 @@
 from pyspark.sql import SparkSession
 
+SPARK_PACKAGES = ",".join([
+    "io.delta:delta-core_2.12:2.1.0",
+    "org.apache.hadoop:hadoop-aws:3.3.2",
+    "org.postgresql:postgresql:42.7.3",
+])
+
 def get_spark_session(app_name):
     return SparkSession.builder \
         .appName(app_name) \
-        .config("spark.jars.packages", "io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2") \
+        .config("spark.jars.packages", SPARK_PACKAGES) \
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension") \
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog") \
         .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000") \

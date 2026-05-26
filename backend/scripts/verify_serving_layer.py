@@ -48,7 +48,7 @@ TABLE_SPECS = [
         score_role="score",
     ),
     TableSpec(
-        name="serving_als_recommendations",
+        name="serving_als",
         required_by_default=False,
         columns_by_role={
             "user_id": ("user_id",),
@@ -59,7 +59,7 @@ TABLE_SPECS = [
         score_role="score",
     ),
     TableSpec(
-        name="serving_content_recommendations",
+        name="serving_content_based",
         required_by_default=False,
         columns_by_role={
             "source_product_id": ("source_product_id", "product_id"),
@@ -74,7 +74,7 @@ TABLE_SPECS = [
         score_role="score",
     ),
     TableSpec(
-        name="serving_item_similarities",
+        name="serving_item_based",
         required_by_default=False,
         columns_by_role={
             "source_product_id": ("source_product_id", "product_id"),
