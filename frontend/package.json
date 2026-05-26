@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "verify:track": "node scripts/verify-track-route.mjs"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

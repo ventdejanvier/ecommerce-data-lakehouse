@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from functools import lru_cache
 from typing import Any
 
@@ -23,7 +24,8 @@ def _delivery_report(err: Any, msg: Any) -> None:
 
 @lru_cache(maxsize=1)
 def _get_producer() -> Producer:
-    return Producer({"bootstrap.servers": "localhost:9092"})
+    bootstrap_servers = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+    return Producer({"bootstrap.servers": bootstrap_servers})
 
 
 def produce_event(topic: str, event: dict[str, Any]) -> None:
@@ -40,6 +42,15 @@ def produce_event(topic: str, event: dict[str, Any]) -> None:
         )
         # Non-blocking poll to serve delivery callbacks.
         producer.poll(0)
+        pending = producer.flush(
+            float(os.getenv("KAFKA_FLUSH_TIMEOUT_SECONDS", "1.0"))
+        )
+        if pending:
+            logger.warning(
+                "Kafka producer still has %s pending message(s) for topic '%s'",
+                pending,
+                topic,
+            )
     except BufferError:
         logger.warning(
             "Kafka producer queue is full; dropping event for topic '%s'", topic

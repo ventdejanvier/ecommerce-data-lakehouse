@@ -92,7 +92,7 @@ export function logEvent(type: EventType, payload: EventPayload = {}): void {
   });
 
   // Fire-and-forget async HTTP POST - does NOT await to avoid blocking UI
-  fetch("http://localhost:8000/api/track", {
+  fetch("/api/track", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

@@ -25,4 +25,10 @@ run_kmeans_task = BashOperator(
     dag=dag,
 )
 
-run_kmeans_task
+generate_recommendations_task = BashOperator(
+    task_id='generate_cluster_recommendations',
+    bash_command='docker exec -u root jupyter-notebook spark-submit --packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2,org.postgresql:postgresql:42.7.3 /home/jovyan/scripts/generate_cluster_recommendations.py',
+    dag=dag,
+)
+
+run_kmeans_task >> generate_recommendations_task

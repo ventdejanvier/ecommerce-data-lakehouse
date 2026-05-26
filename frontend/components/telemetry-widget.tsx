@@ -13,6 +13,20 @@ interface TelemetryLog {
   details: string;
 }
 
+function getProductPayloadValue(payload: EventPayload, key: 'id' | 'name'): string | undefined {
+  const product = payload.product;
+  if (!product || typeof product !== 'object') {
+    return undefined;
+  }
+
+  const value = (product as Record<string, unknown>)[key];
+  if (typeof value === 'string' || typeof value === 'number') {
+    return String(value);
+  }
+
+  return undefined;
+}
+
 export function TelemetryWidget() {
   const [isOpen, setIsOpen] = useState(true);
   const [isMinimized, setIsMinimized] = useState(false);
@@ -50,10 +64,10 @@ export function TelemetryWidget() {
     switch (type) {
       case 'add_to_cart':
       case 'CART_UPDATE':
-        return `ProductID: ${payload.productId || payload.product?.id || 'N/A'}`;
+        return `ProductID: ${payload.productId || getProductPayloadValue(payload, 'id') || 'N/A'}`;
       case 'product_click':
       case 'product_view':
-        return `Product: ${payload.productName || payload.product?.name || 'N/A'}`;
+        return `Product: ${payload.productName || getProductPayloadValue(payload, 'name') || 'N/A'}`;
       case 'search':
         return `Query: "${payload.query || payload.searchTerm || ''}"`;
       case 'category_filter':

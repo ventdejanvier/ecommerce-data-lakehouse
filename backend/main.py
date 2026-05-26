@@ -16,6 +16,11 @@ app.add_middleware(
 )
 
 
+@app.get("/api/health")
+def health_check() -> dict[str, str]:
+    return {"status": "ok"}
+
+
 @app.post("/api/track", status_code=status.HTTP_202_ACCEPTED)
 async def track_event(
     event: TelemetryEvent, background_tasks: BackgroundTasks
@@ -27,6 +32,14 @@ async def track_event(
         "status": "accepted",
         "eventId": event.eventId,
     }
+
+
+@app.get(
+    "/api/recommend/home/{user_id}",
+    response_model=list[RecommendationResponse],
+)
+def get_home_recommendations(user_id: str) -> list[dict[str, Any]]:
+    return get_recommendations_from_db(user_id)
 
 
 @app.get(

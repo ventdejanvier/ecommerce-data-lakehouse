@@ -12,6 +12,10 @@ import { useToast } from '@/hooks/use-toast';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 
+const BACKEND_API_BASE_URL = (
+  process.env.NEXT_PUBLIC_BACKEND_API_URL ?? 'http://localhost:8000'
+).replace(/\/$/, '');
+
 // Standard catalog products (8 items) - controlled by search/category filters
 const catalogProducts: Product[] = [
   {
@@ -220,7 +224,7 @@ export function ProductGrid({
 
       try {
         const response = await fetch(
-          `http://localhost:8000/api/recommendations/${encodeURIComponent(userId)}`,
+          `${BACKEND_API_BASE_URL}/api/recommend/home/${encodeURIComponent(userId)}`,
           { signal: abortController.signal }
         );
 
