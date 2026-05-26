@@ -173,7 +173,7 @@ export function ProductCard({
             <span className="text-xs font-medium text-foreground">{product.rating.toFixed(1)}</span>
           </div>
           <span className="text-xs text-muted-foreground">
-            ({product.reviewCount.toLocaleString()})
+            ({product.reviewCount.toLocaleString("en-US")})
           </span>
         </div>
 

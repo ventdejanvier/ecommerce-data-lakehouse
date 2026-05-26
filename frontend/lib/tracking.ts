@@ -98,7 +98,9 @@ export function logEvent(type: EventType, payload: EventPayload = {}): void {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(enrichedPayload),
-  }).catch(console.error); // Silently handle network failures
+  }).catch((error) => {
+    console.warn("Tracking API is unreachable:", error.message);
+  });
 }
 
 /**
