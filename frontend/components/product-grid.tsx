@@ -120,8 +120,12 @@ export function ProductGrid({
         if (filterSelection.categoryDetail) {
           params.set('category_detail', filterSelection.categoryDetail);
         }
+        const trimmedSearchQuery = searchQuery.trim();
+        const queryString = trimmedSearchQuery
+          ? `${params.toString()}&query=${encodeURIComponent(trimmedSearchQuery)}`
+          : params.toString();
         const response = await fetch(
-          `${BACKEND_API_BASE_URL}/api/products?${params.toString()}`
+          `${BACKEND_API_BASE_URL}/api/products?${queryString}`
         );
         if (!response.ok) {
           throw new Error(`Failed to fetch products: ${response.status}`);
@@ -146,16 +150,9 @@ export function ProductGrid({
     return () => {
       isMounted = false;
     };
-  }, [filterSelection]);
+  }, [filterSelection, searchQuery]);
 
-  // Filter API products by search query
-  const filteredCatalog = catalogProducts.filter((product) => {
-    const matchesSearch = searchQuery === '' || 
-      product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      product.category.toLowerCase().includes(searchQuery.toLowerCase());
-    
-    return matchesSearch;
-  });
+  const filteredCatalog = catalogProducts;
 
   const handleAiToggle = (checked: boolean) => {
     if (checked === isAiEnabled) {

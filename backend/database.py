@@ -405,6 +405,14 @@ def _slugify(value: str) -> str:
     return slug or "uncategorized"
 
 
+def _escape_ilike_term(value: str) -> str:
+    return (
+        value.replace("!", "!!")
+        .replace("%", "!%")
+        .replace("_", "!_")
+    )
+
+
 def _normalize_text(value: Any, fallback: str) -> str:
     if value is None:
         return fallback
@@ -639,13 +647,13 @@ def get_products_from_db(
         if search_query:
             search_terms = [
                 term.strip()
-                for term in re.split(r"\s+", search_query.strip())
+                for term in search_query.strip().split()
                 if term.strip()
             ]
         for index, term in enumerate(search_terms):
             param_name = f"search_term_{index}"
-            params[param_name] = f"%{term}%"
-            where_clauses.append(f"{name_expr} ILIKE :{param_name}")
+            params[param_name] = f"%{_escape_ilike_term(term)}%"
+            where_clauses.append(f"{name_expr} ILIKE :{param_name} ESCAPE '!'")
 
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 
