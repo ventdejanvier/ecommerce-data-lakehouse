@@ -39,7 +39,7 @@ def get_global_recommendations():
             SELECT 
                 g.product_id::text AS id,
                 p.display_name AS name,
-                COALESCE(p.price, 25.50) AS price,
+                25.50 AS price,
                 p.category_main AS category,
                 10.0 AS cluster_total_score
             FROM public.global_popular g
@@ -55,7 +55,7 @@ def get_global_recommendations():
             SELECT 
                 product_id::text AS id,
                 display_name AS name,
-                COALESCE(price, 25.50) AS price,
+                25.50 AS price,
                 category_main AS category,
                 10.0 AS cluster_total_score
             FROM public.dim_products

@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from 'next/server';
 export async function POST(request: NextRequest) {
   try {
     const payload = await request.json();
-    const backendBaseUrl = (process.env.BACKEND_API_URL ?? 'http://localhost:8000').replace(/\/$/, '');
+    const backendBaseUrl = (process.env.BACKEND_API_URL ?? 'http://127.0.0.1:8000').replace(/\/$/, '');
     const backendResponse = await fetch(`${backendBaseUrl}/api/track`, {
       method: 'POST',
       headers: {
