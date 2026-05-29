@@ -3,23 +3,20 @@
 import { motion } from 'framer-motion';
 import { logEvent } from '@/lib/tracking';
 
-export interface CategoryWithBrands {
+export interface CategoryOption {
   category_main: string;
-  brands: string[];
 }
 
 interface CategoryFiltersProps {
-  categoriesWithBrands: CategoryWithBrands[];
+  categories: CategoryOption[];
   selectedCategory: string;
-  selectedBrand: string | null;
   isLoading?: boolean;
-  onFilterChange: (category: string, brand: string | null) => void;
+  onFilterChange: (category: string) => void;
 }
 
 export function CategoryFilters({
-  categoriesWithBrands,
+  categories,
   selectedCategory,
-  selectedBrand,
   isLoading = false,
   onFilterChange,
 }: CategoryFiltersProps) {
@@ -31,7 +28,7 @@ export function CategoryFilters({
       previousCategory: selectedCategory,
       timestamp: new Date().toISOString(),
     });
-    onFilterChange('all', null);
+    onFilterChange('all');
   };
 
   const handleCategoryClick = (categoryName: string) => {
@@ -42,19 +39,13 @@ export function CategoryFilters({
       previousCategory: selectedCategory,
       timestamp: new Date().toISOString(),
     });
-    onFilterChange(categoryName, null);
-  };
-
-  const handleBrandClick = (categoryName: string, brandName: string) => {
-    const nextBrand =
-      selectedCategory === categoryName && selectedBrand === brandName ? null : brandName;
-    onFilterChange(categoryName, nextBrand);
+    onFilterChange(categoryName);
   };
 
   return (
     <div className="rounded-xl border border-border bg-card p-4">
       <div className="mb-3 flex items-center justify-between">
-        <h3 className="text-sm font-semibold text-foreground">Filter by Category / Brand</h3>
+        <h3 className="text-sm font-semibold text-foreground">Filter by Category</h3>
         {isLoading && <span className="text-xs text-muted-foreground">Loading...</span>}
       </div>
 
@@ -71,7 +62,7 @@ export function CategoryFilters({
       </button>
 
       <div className="space-y-3">
-        {categoriesWithBrands.map((group) => {
+        {categories.map((group) => {
           const isCategorySelected = selectedCategory === group.category_main;
 
           return (
@@ -92,25 +83,6 @@ export function CategoryFilters({
               >
                 {group.category_main}
               </button>
-
-              <ul className="mt-2 space-y-1.5">
-                {group.brands.map((brand) => {
-                  const checked = isCategorySelected && selectedBrand === brand;
-                  return (
-                    <li key={`${group.category_main}-${brand}`}>
-                      <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted">
-                        <input
-                          type="checkbox"
-                          checked={checked}
-                          onChange={() => handleBrandClick(group.category_main, brand)}
-                          className="h-4 w-4 rounded border-border"
-                        />
-                        <span>{brand}</span>
-                      </label>
-                    </li>
-                  );
-                })}
-              </ul>
             </motion.div>
           );
         })}

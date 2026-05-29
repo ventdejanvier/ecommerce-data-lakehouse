@@ -112,6 +112,7 @@ def get_category_tree() -> list[dict[str, Any]]:
 @app.get("/api/products", response_model=list[ProductResponse])
 def get_products(
     category: str = Query(default="all"),
+    query: str | None = Query(default=None),
     category_main: str | None = Query(default=None),
     category_sub: str | None = Query(default=None),
     category_detail: str | None = Query(default=None),
@@ -123,6 +124,7 @@ def get_products(
         selected_category_sub=category_sub,
         selected_category_detail=category_detail,
         selected_brands=brand,
+        search_query=query,
     )
 
 

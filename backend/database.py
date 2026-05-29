@@ -567,6 +567,7 @@ def get_products_from_db(
     selected_category_sub: str | None = None,
     selected_category_detail: str | None = None,
     selected_brands: list[str] | None = None,
+    search_query: str | None = None,
     limit: int = 120,
 ) -> list[dict[str, Any]]:
     with engine.connect() as connection:
@@ -633,6 +634,18 @@ def get_products_from_db(
             where_clauses.append(
                 f"LOWER({brand_expr}) IN ({', '.join(brand_placeholders)})"
             )
+
+        search_terms: list[str] = []
+        if search_query:
+            search_terms = [
+                term.strip()
+                for term in re.split(r"\s+", search_query.strip())
+                if term.strip()
+            ]
+        for index, term in enumerate(search_terms):
+            param_name = f"search_term_{index}"
+            params[param_name] = f"%{term}%"
+            where_clauses.append(f"{name_expr} ILIKE :{param_name}")
 
         where_clause = f"WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 

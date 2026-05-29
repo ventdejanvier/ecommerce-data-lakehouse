@@ -8,23 +8,19 @@ import {
   AccordionItem,
   AccordionTrigger,
 } from '@/components/ui/accordion';
-import { Checkbox } from '@/components/ui/checkbox';
 import { cn } from '@/lib/utils';
 
 export interface CategoryDetailNode {
   category_detail: string;
-  brands: string[];
 }
 
 export interface CategorySubNode {
   category_sub: string;
-  brands: string[];
   details: CategoryDetailNode[];
 }
 
 export interface CategoryMainNode {
   category_main: string;
-  brands: string[];
   subcategories: CategorySubNode[];
 }
 
@@ -32,7 +28,6 @@ export interface ProductFilterSelection {
   categoryMain: string;
   categorySub: string | null;
   categoryDetail: string | null;
-  brands: string[];
 }
 
 interface ProductFilterProps {
@@ -40,10 +35,6 @@ interface ProductFilterProps {
   selection: ProductFilterSelection;
   isLoading?: boolean;
   onFilterChange: (selection: ProductFilterSelection) => void;
-}
-
-function uniqueBrands(brands: string[]) {
-  return Array.from(new Set(brands));
 }
 
 export function ProductFilter({
@@ -57,7 +48,6 @@ export function ProductFilter({
       categoryMain: 'all',
       categorySub: null,
       categoryDetail: null,
-      brands: [],
     });
   };
 
@@ -66,7 +56,6 @@ export function ProductFilter({
       categoryMain,
       categorySub: null,
       categoryDetail: null,
-      brands: [],
     });
   };
 
@@ -75,7 +64,6 @@ export function ProductFilter({
       categoryMain,
       categorySub,
       categoryDetail: null,
-      brands: [],
     });
   };
 
@@ -88,43 +76,6 @@ export function ProductFilter({
       categoryMain,
       categorySub,
       categoryDetail,
-      brands: [],
-    });
-  };
-
-  const handleToggleBrand = (
-    path: {
-      categoryMain: string;
-      categorySub: string | null;
-      categoryDetail: string | null;
-    },
-    brand: string,
-    checked: boolean
-  ) => {
-    const isSamePath =
-      selection.categoryMain === path.categoryMain &&
-      selection.categorySub === path.categorySub &&
-      selection.categoryDetail === path.categoryDetail;
-
-    if (!isSamePath) {
-      onFilterChange({
-        categoryMain: path.categoryMain,
-        categorySub: path.categorySub,
-        categoryDetail: path.categoryDetail,
-        brands: checked ? [brand] : [],
-      });
-      return;
-    }
-
-    const nextBrands = checked
-      ? uniqueBrands([...selection.brands, brand])
-      : selection.brands.filter((item) => item !== brand);
-
-    onFilterChange({
-      categoryMain: selection.categoryMain,
-      categorySub: selection.categorySub,
-      categoryDetail: selection.categoryDetail,
-      brands: nextBrands,
     });
   };
 
@@ -196,35 +147,6 @@ export function ProductFilter({
                   Only {mainNode.category_main}
                 </button>
 
-                <div className="space-y-1">
-                  {mainNode.brands.map((brand) => {
-                    const checked =
-                      isMainActive && selection.brands.includes(brand);
-                    return (
-                      <label
-                        key={`${mainNode.category_main}-brand-${brand}`}
-                        className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1.5 text-sm text-muted-foreground hover:bg-muted"
-                      >
-                        <Checkbox
-                          checked={checked}
-                          onCheckedChange={(next) =>
-                            handleToggleBrand(
-                              {
-                                categoryMain: mainNode.category_main,
-                                categorySub: null,
-                                categoryDetail: null,
-                              },
-                              brand,
-                              next === true
-                            )
-                          }
-                        />
-                        <span>{brand}</span>
-                      </label>
-                    );
-                  })}
-                </div>
-
                 <Accordion type="multiple" className="space-y-1 border-l border-border/70 pl-3">
                   {mainNode.subcategories.map((subNode) => {
                     const isSubActive =
@@ -268,35 +190,6 @@ export function ProductFilter({
                             Only {subNode.category_sub}
                           </button>
 
-                          <div className="space-y-1">
-                            {subNode.brands.map((brand) => {
-                              const checked =
-                                isSubActive && selection.brands.includes(brand);
-                              return (
-                                <label
-                                  key={`${mainNode.category_main}-${subNode.category_sub}-brand-${brand}`}
-                                  className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted"
-                                >
-                                  <Checkbox
-                                    checked={checked}
-                                    onCheckedChange={(next) =>
-                                      handleToggleBrand(
-                                        {
-                                          categoryMain: mainNode.category_main,
-                                          categorySub: subNode.category_sub,
-                                          categoryDetail: null,
-                                        },
-                                        brand,
-                                        next === true
-                                      )
-                                    }
-                                  />
-                                  <span>{brand}</span>
-                                </label>
-                              );
-                            })}
-                          </div>
-
                           <Accordion type="multiple" className="space-y-1 border-l border-border/70 pl-3">
                             {subNode.details.map((detailNode) => {
                               const isDetailActive =
@@ -318,9 +211,6 @@ export function ProductFilter({
                                   >
                                     <div className="flex w-full items-center justify-between">
                                       <span>{detailNode.category_detail}</span>
-                                      <Badge variant="secondary" className="text-[10px]">
-                                        {detailNode.brands.length}
-                                      </Badge>
                                     </div>
                                   </AccordionTrigger>
                                   <AccordionContent className="space-y-1 pb-1">
@@ -342,33 +232,6 @@ export function ProductFilter({
                                     >
                                       Only {detailNode.category_detail}
                                     </button>
-
-                                    {detailNode.brands.map((brand) => {
-                                      const checked =
-                                        isDetailActive && selection.brands.includes(brand);
-                                      return (
-                                        <label
-                                          key={`${mainNode.category_main}-${subNode.category_sub}-${detailNode.category_detail}-brand-${brand}`}
-                                          className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted"
-                                        >
-                                          <Checkbox
-                                            checked={checked}
-                                            onCheckedChange={(next) =>
-                                              handleToggleBrand(
-                                                {
-                                                  categoryMain: mainNode.category_main,
-                                                  categorySub: subNode.category_sub,
-                                                  categoryDetail: detailNode.category_detail,
-                                                },
-                                                brand,
-                                                next === true
-                                              )
-                                            }
-                                          />
-                                          <span>{brand}</span>
-                                        </label>
-                                      );
-                                    })}
                                   </AccordionContent>
                                 </AccordionItem>
                               );

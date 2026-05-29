@@ -58,7 +58,6 @@ export function ProductGrid({
     categoryMain: 'all',
     categorySub: null,
     categoryDetail: null,
-    brands: [],
   });
   const [isCategoryLoading, setIsCategoryLoading] = useState(false);
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
@@ -78,19 +77,19 @@ export function ProductGrid({
   useEffect(() => {
     let isMounted = true;
 
-    const fetchCategoriesAndBrands = async () => {
+    const fetchCategories = async () => {
       setIsCategoryLoading(true);
       try {
-        const response = await fetch(`${BACKEND_API_BASE_URL}/api/categories-and-brands`);
+        const response = await fetch(`${BACKEND_API_BASE_URL}/api/category-tree`);
         if (!response.ok) {
-          throw new Error(`Failed to fetch categories/brands: ${response.status}`);
+          throw new Error(`Failed to fetch categories: ${response.status}`);
         }
         const data = (await response.json()) as CategoryMainNode[];
         if (isMounted) {
           setCategoryTree(data);
         }
       } catch (error) {
-        console.error('Failed to fetch categories/brands:', error);
+        console.error('Failed to fetch categories:', error);
       } finally {
         if (isMounted) {
           setIsCategoryLoading(false);
@@ -98,7 +97,7 @@ export function ProductGrid({
       }
     };
 
-    void fetchCategoriesAndBrands();
+    void fetchCategories();
     return () => {
       isMounted = false;
     };
@@ -121,8 +120,6 @@ export function ProductGrid({
         if (filterSelection.categoryDetail) {
           params.set('category_detail', filterSelection.categoryDetail);
         }
-        filterSelection.brands.forEach((brand) => params.append('brand', brand));
-
         const response = await fetch(
           `${BACKEND_API_BASE_URL}/api/products?${params.toString()}`
         );
@@ -182,11 +179,7 @@ export function ProductGrid({
     ]
       .filter(Boolean)
       .join(' > ');
-    onCategoryChange?.(
-      selection.brands.length
-        ? `${path} / ${selection.brands.join(', ')}`
-        : path
-    );
+    onCategoryChange?.(path);
   };
 
   const containerVariants = {
