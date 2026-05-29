@@ -11,9 +11,12 @@ import {
   SheetFooter,
 } from '@/components/ui/sheet';
 import { Button } from '@/components/ui/button';
+import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
 import { useCartStore } from '@/lib/cart-store';
 import { logEvent } from '@/lib/tracking';
 import { useToast } from '@/hooks/use-toast';
+import type { Product } from '@/components/product-card';
 import {
   Plus,
   Minus,
@@ -28,7 +31,12 @@ import {
   Gamepad2,
   CheckCircle2,
   Loader2,
+  Sparkles,
 } from 'lucide-react';
+
+const BACKEND_API_BASE_URL = (
+  process.env.NEXT_PUBLIC_BACKEND_API_URL ?? 'http://localhost:8000'
+).replace(/\/$/, '');
 
 const categoryIcons: Record<string, React.ElementType> = {
   Smartphones: Smartphone,
@@ -39,11 +47,23 @@ const categoryIcons: Record<string, React.ElementType> = {
   Gaming: Gamepad2,
 };
 
+interface CartRecommendationResponse {
+  id?: string;
+  name?: string;
+  product_id?: string | number;
+  display_name?: string;
+  price?: number | string;
+  category?: string;
+  category_name?: string;
+  cluster_total_score?: number;
+}
+
 export function CartSheet() {
   const {
     items,
     isOpen,
     closeCart,
+    addItem,
     increaseQuantity,
     decreaseQuantity,
     removeItem,
@@ -54,11 +74,88 @@ export function CartSheet() {
   const { toast } = useToast();
   const [isCheckingOut, setIsCheckingOut] = useState(false);
   const [isMounted, setIsMounted] = useState(false);
+  const [cartRecommendations, setCartRecommendations] = useState<Product[]>([]);
+  const [isRecsLoading, setIsRecsLoading] = useState(false);
   
   // Hydration fix: only render cart data after client mount
   useEffect(() => {
     setIsMounted(true);
   }, []);
+
+  useEffect(() => {
+    let isActive = true;
+
+    const mapRecommendation = (item: CartRecommendationResponse): Product | null => {
+      const rawId = item.id ?? item.product_id;
+      if (rawId === undefined || rawId === null) {
+        return null;
+      }
+
+      const id = String(rawId);
+      const score = Number(item.cluster_total_score ?? 1);
+
+      return {
+        id,
+        name: String(item.name ?? item.display_name ?? `Product ${id}`),
+        price: Number(item.price ?? 0),
+        rating: 4.5,
+        reviewCount: Math.max(1, Math.round(score)),
+        category: String(item.category ?? item.category_name ?? 'Recommended'),
+        inStock: true,
+      };
+    };
+
+    const fetchCartRecommendations = async () => {
+      if (items.length === 0) {
+        setCartRecommendations([]);
+        setIsRecsLoading(false);
+        return;
+      }
+
+      setIsRecsLoading(true);
+      const productIds = items.map((item) => item.product.id);
+
+      try {
+        const response = await fetch(`${BACKEND_API_BASE_URL}/api/recommend/cart`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ product_ids: productIds }),
+          cache: 'no-store',
+        });
+
+        if (!response.ok) {
+          throw new Error(`Failed to fetch cart recommendations: ${response.status}`);
+        }
+
+        const data = (await response.json()) as CartRecommendationResponse[];
+        const cartProductIds = new Set(productIds);
+        if (isActive) {
+          setCartRecommendations(
+            data
+              .map(mapRecommendation)
+              .filter((item): item is Product => item !== null && !cartProductIds.has(item.id))
+          );
+        }
+      } catch (error) {
+        console.error('Failed to fetch cart recommendations:', error);
+        if (isActive) {
+          setCartRecommendations([]);
+        }
+      } finally {
+        if (isActive) {
+          setIsRecsLoading(false);
+        }
+      }
+    };
+
+    void fetchCartRecommendations();
+
+    return () => {
+      isActive = false;
+    };
+  }, [items]);
 
   const handleIncreaseQuantity = (productId: string, productName: string) => {
     increaseQuantity(productId);
@@ -87,6 +184,20 @@ export function CartSheet() {
       productName,
       action: 'remove',
       timestamp: new Date().toISOString(),
+    });
+  };
+
+  const handleAddRecommendation = (product: Product) => {
+    addItem(product);
+    logEvent('add_to_cart', {
+      action: 'cart_cross_sell_add',
+      productId: product.id,
+      productName: product.name,
+      productPrice: product.price,
+      productCategory: product.category,
+      quantity: 1,
+      cartAction: 'add',
+      source: 'frequently_bought_together',
     });
   };
 
@@ -266,6 +377,69 @@ export function CartSheet() {
                     </motion.div>
                   );
                 })}
+
+                <Separator className="my-4" />
+
+                <div className="space-y-2">
+                  <h3 className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+                    <Sparkles className="h-3.5 w-3.5 text-primary" />
+                    Frequently Bought Together
+                  </h3>
+
+                  {isRecsLoading ? (
+                    <div className="space-y-2">
+                      {Array.from({ length: 2 }).map((_, index) => (
+                        <div
+                          key={index}
+                          className="flex items-center gap-3 rounded-lg border border-border bg-background p-2"
+                        >
+                          <Skeleton className="h-10 w-10 rounded-md" />
+                          <div className="min-w-0 flex-1 space-y-2">
+                            <Skeleton className="h-3 w-4/5" />
+                            <Skeleton className="h-3 w-16" />
+                          </div>
+                          <Skeleton className="h-8 w-8 rounded-md" />
+                        </div>
+                      ))}
+                    </div>
+                  ) : cartRecommendations.length > 0 ? (
+                    <div className="space-y-2">
+                      {cartRecommendations.map((product) => {
+                        const IconComponent = categoryIcons[product.category] || ShoppingBag;
+                        return (
+                          <div
+                            key={product.id}
+                            className="flex items-center gap-3 rounded-lg border border-border bg-background p-2"
+                          >
+                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-muted">
+                              <IconComponent className="h-5 w-5 text-muted-foreground" />
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-xs font-medium text-foreground">
+                                {product.name}
+                              </p>
+                              <p className="text-xs font-semibold text-muted-foreground">
+                                ${product.price.toFixed(2)}
+                              </p>
+                            </div>
+                            <Button
+                              size="icon"
+                              variant="secondary"
+                              className="h-8 w-8 shrink-0"
+                              onClick={() => handleAddRecommendation(product)}
+                            >
+                              <Plus className="h-4 w-4" />
+                            </Button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">
+                      No add-ons found for these items yet.
+                    </p>
+                  )}
+                </div>
               </div>
             )}
           </AnimatePresence>

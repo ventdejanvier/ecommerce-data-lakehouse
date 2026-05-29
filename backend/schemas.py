@@ -51,6 +51,10 @@ class RecommendationResponse(BaseModel):
     cluster_total_score: float
 
 
+class CartRecommendRequest(BaseModel):
+    product_ids: list[str]
+
+
 class CategoryResponse(BaseModel):
     id: str
     name: str

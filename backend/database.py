@@ -3,7 +3,7 @@ import re
 from decimal import Decimal
 from typing import Any
 
-from sqlalchemy import create_engine, text
+from sqlalchemy import bindparam, create_engine, text
 from sqlalchemy.engine import Connection
 
 DATABASE_URL = os.getenv(
@@ -331,6 +331,91 @@ def get_content_based_recommendations(
         rows = connection.execute(
             query,
             {"product_id": product_id, "limit": limit},
+        ).mappings().all()
+        return [_normalize_recommendation_response(dict(row)) for row in rows]
+
+
+def get_item_based_recommendations(
+    product_ids: list[str],
+    limit: int = 4,
+) -> list[dict[str, Any]]:
+    cart_product_ids = [
+        str(product_id).strip()
+        for product_id in product_ids
+        if product_id and str(product_id).strip()
+    ]
+    if not cart_product_ids:
+        return []
+
+    with engine.connect() as connection:
+        columns = _get_public_table_columns(connection, "serving_item_based")
+        if not columns:
+            return []
+
+        source_col = _resolve_column(columns, ("source_product_id", "product_id"))
+        product_col = _resolve_column(
+            columns,
+            ("similar_product_id", "recommended_product_id", "target_product_id"),
+        )
+        score_col = _resolve_column(columns, ("score", "similarity_score", "cosine_similarity"))
+        display_col = _resolve_column(
+            columns,
+            ("similar_display_name", "recommended_display_name", "display_name", "product_name"),
+        )
+        frequency_col = _resolve_column(columns, ("co_interaction_count", "frequency", "count"))
+        rank_col = _resolve_column(columns, ("rank", "recommendation_rank"))
+
+        if not source_col or not product_col or not score_col:
+            return []
+
+        source_expr = _qualified_column("r", source_col)
+        product_expr = _qualified_column("r", product_col)
+        score_expr = _qualified_column("r", score_col)
+        product_join, price_expr, product_name_expr, category_expr = _get_dim_product_lookup_sql(
+            connection,
+            product_expr,
+        )
+        source_display_expr = f"{_qualified_column('r', display_col)}::text" if display_col else "NULL::text"
+        display_expr = f"COALESCE(MAX({source_display_expr}), {product_name_expr}, 'Product ' || {product_expr}::text)"
+
+        order_terms = [f"MAX({score_expr}) DESC"]
+        if frequency_col:
+            order_terms.append(f"SUM({_qualified_column('r', frequency_col)}) DESC")
+        if rank_col:
+            order_terms.append(f"MIN({_qualified_column('r', rank_col)}) ASC")
+        order_terms.append(f"{product_expr} ASC")
+        order_clause = ", ".join(order_terms)
+
+        query = text(
+            f"""
+            SELECT
+                -1 AS cluster_id,
+                {product_expr} AS product_id,
+                {display_expr} AS display_name,
+                MAX({score_expr}) AS cluster_total_score,
+                {price_expr} AS price,
+                {category_expr} AS category_name
+            FROM {table_ref("serving_item_based")} r
+            {product_join}
+            WHERE {source_expr}::text IN :source_product_ids
+              AND {product_expr} IS NOT NULL
+              AND {product_expr}::text NOT IN :excluded_product_ids
+              AND {score_expr} IS NOT NULL
+            GROUP BY {product_expr}, {product_name_expr}, {price_expr}, {category_expr}
+            ORDER BY {order_clause}
+            LIMIT :limit
+            """
+        ).bindparams(
+            bindparam("source_product_ids", expanding=True),
+            bindparam("excluded_product_ids", expanding=True),
+        )
+        rows = connection.execute(
+            query,
+            {
+                "source_product_ids": cart_product_ids,
+                "excluded_product_ids": cart_product_ids,
+                "limit": max(1, limit),
+            },
         ).mappings().all()
         return [_normalize_recommendation_response(dict(row)) for row in rows]
 

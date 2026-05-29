@@ -8,11 +8,13 @@ from database import (
     get_categories_from_db,
     get_content_based_recommendations,
     get_dim_product_price_expr,
+    get_item_based_recommendations,
     get_products_from_db,
     get_recommendations_with_fallback,
 )
 from kafka_producer import produce_event
 from schemas import (
+    CartRecommendRequest,
     CategoryResponse,
     ProductResponse,
     RecommendationResponse,
@@ -103,6 +105,14 @@ def get_product_recommendations(
     limit: int = Query(default=4, ge=1, le=20),
 ) -> list[dict[str, Any]]:
     return get_content_based_recommendations(product_id, limit=limit)
+
+
+@app.post("/api/recommend/cart")
+def get_cart_recommendations(
+    payload: CartRecommendRequest,
+    limit: int = Query(default=4, ge=1, le=20),
+) -> list[dict[str, Any]]:
+    return get_item_based_recommendations(payload.product_ids, limit=limit)
 
 
 @app.get("/api/categories", response_model=list[CategoryResponse])
