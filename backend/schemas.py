@@ -49,3 +49,22 @@ class RecommendationResponse(BaseModel):
     product_id: int
     display_name: str
     cluster_total_score: float
+
+
+class CategoryResponse(BaseModel):
+    id: str
+    name: str
+
+
+class ProductResponse(BaseModel):
+    id: str
+    name: str
+    price: float
+    originalPrice: float | None = None
+    rating: float
+    reviewCount: int
+    category: str
+    categorySub: str = ""
+    categoryDetail: str = ""
+    brand: str
+    inStock: bool

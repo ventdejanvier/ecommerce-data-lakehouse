@@ -1,111 +1,120 @@
 'use client';
 
-import { useState } from 'react';
 import { motion } from 'framer-motion';
-import { Button } from '@/components/ui/button';
 import { logEvent } from '@/lib/tracking';
-import { 
-  Smartphone, 
-  Laptop, 
-  Headphones, 
-  Watch, 
-  Monitor,
-  Gamepad2,
-  LayoutGrid
-} from 'lucide-react';
 
-const categories = [
-  { id: 'all', name: 'All', icon: LayoutGrid },
-  { id: 'smartphones', name: 'Smartphones', icon: Smartphone },
-  { id: 'laptops', name: 'Laptops', icon: Laptop },
-  { id: 'audio', name: 'Audio', icon: Headphones },
-  { id: 'wearables', name: 'Wearables', icon: Watch },
-  { id: 'monitors', name: 'Monitors', icon: Monitor },
-  { id: 'gaming', name: 'Gaming', icon: Gamepad2 },
-];
-
-interface CategoryFiltersProps {
-  onCategoryChange?: (categoryId: string) => void;
+export interface CategoryWithBrands {
+  category_main: string;
+  brands: string[];
 }
 
-export function CategoryFilters({ onCategoryChange }: CategoryFiltersProps) {
-  const [activeCategory, setActiveCategory] = useState('all');
+interface CategoryFiltersProps {
+  categoriesWithBrands: CategoryWithBrands[];
+  selectedCategory: string;
+  selectedBrand: string | null;
+  isLoading?: boolean;
+  onFilterChange: (category: string, brand: string | null) => void;
+}
 
-  const handleCategoryClick = (categoryId: string, categoryName: string) => {
+export function CategoryFilters({
+  categoriesWithBrands,
+  selectedCategory,
+  selectedBrand,
+  isLoading = false,
+  onFilterChange,
+}: CategoryFiltersProps) {
+  const handleSelectAll = () => {
     logEvent('category_filter', {
       action: 'category_selected',
-      categoryId,
-      categoryName,
-      previousCategory: activeCategory,
+      categoryId: 'all',
+      categoryName: 'All',
+      previousCategory: selectedCategory,
       timestamp: new Date().toISOString(),
     });
-
-    setActiveCategory(categoryId);
-    onCategoryChange?.(categoryId);
+    onFilterChange('all', null);
   };
 
-  const containerVariants = {
-    hidden: { opacity: 0 },
-    visible: {
-      opacity: 1,
-      transition: {
-        staggerChildren: 0.05,
-      },
-    },
+  const handleCategoryClick = (categoryName: string) => {
+    logEvent('category_filter', {
+      action: 'category_selected',
+      categoryId: categoryName,
+      categoryName,
+      previousCategory: selectedCategory,
+      timestamp: new Date().toISOString(),
+    });
+    onFilterChange(categoryName, null);
   };
 
-  const itemVariants = {
-    hidden: { opacity: 0, y: 10 },
-    visible: { opacity: 1, y: 0 },
+  const handleBrandClick = (categoryName: string, brandName: string) => {
+    const nextBrand =
+      selectedCategory === categoryName && selectedBrand === brandName ? null : brandName;
+    onFilterChange(categoryName, nextBrand);
   };
 
   return (
-    <motion.div
-      initial="hidden"
-      animate="visible"
-      variants={containerVariants}
-      className="w-full"
-    >
-      <div className="flex flex-wrap gap-2">
-        {categories.map((category) => {
-          const Icon = category.icon;
-          const isActive = activeCategory === category.id;
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="mb-3 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-foreground">Filter by Category / Brand</h3>
+        {isLoading && <span className="text-xs text-muted-foreground">Loading...</span>}
+      </div>
+
+      <button
+        type="button"
+        onClick={handleSelectAll}
+        className={`mb-4 w-full rounded-md px-3 py-2 text-left text-sm transition-colors ${
+          selectedCategory === 'all'
+            ? 'bg-primary text-primary-foreground'
+            : 'bg-muted text-muted-foreground hover:text-foreground'
+        }`}
+      >
+        All Products
+      </button>
+
+      <div className="space-y-3">
+        {categoriesWithBrands.map((group) => {
+          const isCategorySelected = selectedCategory === group.category_main;
 
           return (
-            <motion.div key={category.id} variants={itemVariants}>
-              <motion.div
-                whileHover={{ scale: 1.03, y: -2 }}
-                whileTap={{ scale: 0.97 }}
+            <motion.div
+              key={group.category_main}
+              initial={{ opacity: 0, y: 6 }}
+              animate={{ opacity: 1, y: 0 }}
+              className="rounded-lg border border-border/60 p-3"
+            >
+              <button
+                type="button"
+                onClick={() => handleCategoryClick(group.category_main)}
+                className={`w-full rounded-md px-2 py-1.5 text-left text-sm font-medium transition-colors ${
+                  isCategorySelected
+                    ? 'bg-primary/10 text-foreground'
+                    : 'text-muted-foreground hover:bg-muted'
+                }`}
               >
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => handleCategoryClick(category.id, category.name)}
-                  className={`
-                    relative px-4 py-2 rounded-lg transition-all duration-300
-                    ${isActive 
-                      ? 'bg-primary text-primary-foreground shadow-md' 
-                      : 'bg-muted text-muted-foreground hover:text-foreground hover:bg-muted/80 border border-border'
-                    }
-                  `}
-                >
-                  {isActive && (
-                    <motion.div
-                      layoutId="activeCategory"
-                      className="absolute inset-0 bg-primary rounded-lg"
-                      transition={{ type: 'spring', bounce: 0.2, duration: 0.6 }}
-                    />
-                  )}
-                  <span className="relative flex items-center gap-2">
-                    <Icon className="h-4 w-4" />
-                    {category.name}
-                  </span>
-                </Button>
-              </motion.div>
+                {group.category_main}
+              </button>
+
+              <ul className="mt-2 space-y-1.5">
+                {group.brands.map((brand) => {
+                  const checked = isCategorySelected && selectedBrand === brand;
+                  return (
+                    <li key={`${group.category_main}-${brand}`}>
+                      <label className="flex cursor-pointer items-center gap-2 rounded px-2 py-1 text-sm text-muted-foreground hover:bg-muted">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => handleBrandClick(group.category_main, brand)}
+                          className="h-4 w-4 rounded border-border"
+                        />
+                        <span>{brand}</span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
             </motion.div>
           );
         })}
       </div>
-    </motion.div>
+    </div>
   );
 }

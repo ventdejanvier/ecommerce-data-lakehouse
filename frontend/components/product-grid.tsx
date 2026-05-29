@@ -1,14 +1,16 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { ProductCard, Product } from './product-card';
 import { SearchBar } from './search-bar';
-import { CategoryFilters } from './category-filters';
+import {
+  ProductFilter,
+  type CategoryMainNode,
+  type ProductFilterSelection,
+} from './product-filter';
 import { Sparkles, Grid3X3 } from 'lucide-react';
 import { type AIRecommendation, useMLStore } from '@/lib/ml-store';
-import { useAuthStore } from '@/lib/auth-store';
-import { useToast } from '@/hooks/use-toast';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
 
@@ -16,263 +18,147 @@ const BACKEND_API_BASE_URL = (
   process.env.NEXT_PUBLIC_BACKEND_API_URL ?? 'http://localhost:8000'
 ).replace(/\/$/, '');
 
-// Standard catalog products (8 items) - controlled by search/category filters
-const catalogProducts: Product[] = [
-  {
-    id: 'cat_001',
-    name: 'Xiaomi 15T Pro',
-    price: 799.99,
-    originalPrice: 899.99,
-    rating: 4.8,
-    reviewCount: 2341,
-    category: 'Smartphones',
-    inStock: true,
-  },
-  {
-    id: 'cat_002',
-    name: 'Redmi Buds 6 Pro',
-    price: 79.99,
-    originalPrice: 99.99,
-    rating: 4.5,
-    reviewCount: 1892,
-    category: 'Audio',
-    inStock: true,
-  },
-  {
-    id: 'cat_003',
-    name: 'Smart Band 10',
-    price: 49.99,
-    rating: 4.6,
-    reviewCount: 3567,
-    category: 'Wearables',
-    inStock: true,
-  },
-  {
-    id: 'cat_004',
-    name: 'Xiaomi G24i Gaming Monitor',
-    price: 179.99,
-    originalPrice: 229.99,
-    rating: 4.4,
-    reviewCount: 876,
-    category: 'Monitors',
-    inStock: true,
-  },
-  {
-    id: 'cat_005',
-    name: 'RedmiBook Pro 15',
-    price: 999.99,
-    originalPrice: 1199.99,
-    rating: 4.7,
-    reviewCount: 1234,
-    category: 'Laptops',
-    inStock: true,
-  },
-  {
-    id: 'cat_006',
-    name: 'Mechanical Gaming Keyboard RGB',
-    price: 89.99,
-    originalPrice: 119.99,
-    rating: 4.6,
-    reviewCount: 2156,
-    category: 'Gaming',
-    inStock: true,
-  },
-  {
-    id: 'cat_007',
-    name: 'Xiaomi Watch S4 Sport',
-    price: 249.99,
-    rating: 4.8,
-    reviewCount: 945,
-    category: 'Wearables',
-    inStock: false,
-  },
-  {
-    id: 'cat_008',
-    name: 'Mi Curved Gaming Monitor 34"',
-    price: 449.99,
-    originalPrice: 549.99,
-    rating: 4.7,
-    reviewCount: 678,
-    category: 'Monitors',
-    inStock: true,
-  },
-];
-
-// Default trending products shown when AI recommendations are unavailable.
-const recommendedProducts: Product[] = [
-  {
-    id: 'rec_001',
-    name: 'Xiaomi 15 Ultra',
-    price: 1299.99,
-    originalPrice: 1499.99,
-    rating: 4.9,
-    reviewCount: 892,
-    category: 'Smartphones',
-    inStock: true,
-  },
-  {
-    id: 'rec_002',
-    name: 'RedmiBook Pro 16 4K',
-    price: 1599.99,
-    originalPrice: 1899.99,
-    rating: 4.8,
-    reviewCount: 456,
-    category: 'Laptops',
-    inStock: true,
-  },
-  {
-    id: 'rec_003',
-    name: 'Xiaomi Buds 5 Pro ANC',
-    price: 199.99,
-    originalPrice: 249.99,
-    rating: 4.7,
-    reviewCount: 1234,
-    category: 'Audio',
-    inStock: true,
-  },
-  {
-    id: 'rec_004',
-    name: 'Xiaomi Watch S5 Pro',
-    price: 399.99,
-    originalPrice: 449.99,
-    rating: 4.9,
-    reviewCount: 567,
-    category: 'Wearables',
-    inStock: true,
-  },
-];
-
 interface ProductGridProps {
+  items?: AIRecommendation[];
   onProductClick?: (product: Product) => void;
   onAddToCart?: (product: Product) => void;
   searchQuery: string;
-  activeCategory: string;
   onSearch: (query: string) => void;
-  onCategoryChange: (categoryId: string) => void;
+  onCategoryChange?: (categoryId: string) => void;
+  onAiToggle?: (enabled: boolean) => void;
 }
 
 function mapRecommendationToProduct(
-  recommendation: AIRecommendation,
-  index: number
+  recommendation: AIRecommendation
 ): Product {
-  const fallbackProduct = recommendedProducts[index % recommendedProducts.length];
-
   return {
-    ...fallbackProduct,
-    id: `ai_${recommendation.product_id}`,
-    name: recommendation.display_name,
+    id: recommendation.id,  
+    name: recommendation.name,  
+    price: recommendation.price,  
+    originalPrice: undefined,
+    rating: 4.5,
     reviewCount: Math.max(1, Math.round(recommendation.cluster_total_score)),
-    category: 'Recommended',
+    category: recommendation.category,
+    inStock: true,
   };
 }
 
 export function ProductGrid({ 
+  items,
   onProductClick, 
   onAddToCart,
   searchQuery,
-  activeCategory,
   onSearch,
   onCategoryChange,
+  onAiToggle,
 }: ProductGridProps) {
+  const [categoryTree, setCategoryTree] = useState<CategoryMainNode[]>([]);
+  const [catalogProducts, setCatalogProducts] = useState<Product[]>([]);
+  const [filterSelection, setFilterSelection] = useState<ProductFilterSelection>({
+    categoryMain: 'all',
+    categorySub: null,
+    categoryDetail: null,
+    brands: [],
+  });
+  const [isCategoryLoading, setIsCategoryLoading] = useState(false);
+  const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const {
     isAiEnabled,
     aiRecommendations,
     isLoading,
-    toggleAi,
-    setMLEnabled,
-    setRecommendations,
+    toggleML,
     setLoading,
   } = useMLStore();
-  const user = useAuthStore((state) => state.user);
-  const { toast } = useToast();
-  const userId = user?.id;
-  const hasAiRecommendations = isAiEnabled && aiRecommendations.length > 0;
-  const displayedRecommendations = hasAiRecommendations
-    ? aiRecommendations.map(mapRecommendationToProduct)
-    : recommendedProducts;
-  
-  // Filter catalog products based on search and category
+  const recommendationSource = items ?? aiRecommendations;
+ 
+  const safeSource = Array.isArray(recommendationSource) ? recommendationSource : [];
+  const displayedRecommendations = safeSource.map(mapRecommendationToProduct); 
+  const hasAiRecommendations = isAiEnabled && displayedRecommendations.length > 0;
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchCategoriesAndBrands = async () => {
+      setIsCategoryLoading(true);
+      try {
+        const response = await fetch(`${BACKEND_API_BASE_URL}/api/categories-and-brands`);
+        if (!response.ok) {
+          throw new Error(`Failed to fetch categories/brands: ${response.status}`);
+        }
+        const data = (await response.json()) as CategoryMainNode[];
+        if (isMounted) {
+          setCategoryTree(data);
+        }
+      } catch (error) {
+        console.error('Failed to fetch categories/brands:', error);
+      } finally {
+        if (isMounted) {
+          setIsCategoryLoading(false);
+        }
+      }
+    };
+
+    void fetchCategoriesAndBrands();
+    return () => {
+      isMounted = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const fetchProductsByCategory = async () => {
+      setIsCatalogLoading(true);
+      try {
+        const params = new URLSearchParams();
+        params.set('category', 'all');
+        if (filterSelection.categoryMain !== 'all') {
+          params.set('category_main', filterSelection.categoryMain);
+        }
+        if (filterSelection.categorySub) {
+          params.set('category_sub', filterSelection.categorySub);
+        }
+        if (filterSelection.categoryDetail) {
+          params.set('category_detail', filterSelection.categoryDetail);
+        }
+        filterSelection.brands.forEach((brand) => params.append('brand', brand));
+
+        const response = await fetch(
+          `${BACKEND_API_BASE_URL}/api/products?${params.toString()}`
+        );
+        if (!response.ok) {
+          throw new Error(`Failed to fetch products: ${response.status}`);
+        }
+        const data = (await response.json()) as Product[];
+        if (isMounted) {
+          setCatalogProducts(data);
+        }
+      } catch (error) {
+        console.error('Failed to fetch products:', error);
+        if (isMounted) {
+          setCatalogProducts([]);
+        }
+      } finally {
+        if (isMounted) {
+          setIsCatalogLoading(false);
+        }
+      }
+    };
+
+    void fetchProductsByCategory();
+    return () => {
+      isMounted = false;
+    };
+  }, [filterSelection]);
+
+  // Filter API products by search query
   const filteredCatalog = catalogProducts.filter((product) => {
     const matchesSearch = searchQuery === '' || 
       product.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
       product.category.toLowerCase().includes(searchQuery.toLowerCase());
     
-    const matchesCategory = activeCategory === 'all' || 
-      product.category.toLowerCase() === activeCategory.toLowerCase();
-    
-    return matchesSearch && matchesCategory;
+    return matchesSearch;
   });
-
-  useEffect(() => {
-    if (!isAiEnabled || aiRecommendations.length > 0) {
-      return;
-    }
-
-    const abortController = new AbortController();
-
-    async function fetchRecommendations() {
-      if (!userId) {
-        toast({
-          title: 'Collecting more user behavior to personalize. Falling back to trending.',
-        });
-        setMLEnabled(false);
-        setLoading(false);
-        return;
-      }
-
-      setLoading(true);
-
-      try {
-        const response = await fetch(
-          `${BACKEND_API_BASE_URL}/api/recommend/home/${encodeURIComponent(userId)}`,
-          { signal: abortController.signal }
-        );
-
-        if (!response.ok) {
-          throw new Error(`Recommendation request failed: ${response.status}`);
-        }
-
-        const data = (await response.json()) as AIRecommendation[];
-
-        if (data.length === 0) {
-          toast({
-            title: 'Collecting more user behavior to personalize. Falling back to trending.',
-          });
-          setRecommendations([]);
-          setMLEnabled(false);
-          return;
-        }
-
-        setRecommendations(data);
-      } catch (error) {
-        if (!abortController.signal.aborted) {
-          console.error(error);
-          toast({
-            title: 'Unable to load AI recommendations. Falling back to trending.',
-          });
-          setMLEnabled(false);
-        }
-      } finally {
-        if (!abortController.signal.aborted) {
-          setLoading(false);
-        }
-      }
-    }
-
-    void fetchRecommendations();
-
-    return () => {
-      abortController.abort();
-    };
-  }, [
-    aiRecommendations.length,
-    isAiEnabled,
-    setLoading,
-    setMLEnabled,
-    setRecommendations,
-    toast,
-    userId,
-  ]);
 
   const handleAiToggle = (checked: boolean) => {
     if (checked === isAiEnabled) {
@@ -283,12 +169,24 @@ export function ProductGrid({
       setLoading(false);
     }
 
-    toggleAi();
-    toast({
-      title: checked
-        ? '✨ AI Mode Activated! Searching behavior cluster...'
-        : 'Switched back to general trending products.',
-    });
+    toggleML();
+    onAiToggle?.(checked);
+  };
+
+  const handleFilterChange = (selection: ProductFilterSelection) => {
+    setFilterSelection(selection);
+    const path = [
+      selection.categoryMain,
+      selection.categorySub,
+      selection.categoryDetail,
+    ]
+      .filter(Boolean)
+      .join(' > ');
+    onCategoryChange?.(
+      selection.brands.length
+        ? `${path} / ${selection.brands.join(', ')}`
+        : path
+    );
   };
 
   const containerVariants = {
@@ -407,6 +305,11 @@ export function ProductGrid({
               </motion.div>
             )}
           </AnimatePresence>
+          {!isLoading && isAiEnabled && displayedRecommendations.length === 0 && (
+            <div className="rounded-xl border border-dashed border-border p-6 text-center text-sm text-muted-foreground">
+              No AI recommendations available yet.
+            </div>
+          )}
         </div>
       </div>
 
@@ -424,12 +327,8 @@ export function ProductGrid({
 
       {/* Section B: Product Catalog */}
       <div className="space-y-6">
-        {/* Sticky Filter Bar - contextually placed above catalog */}
-        <div className="sticky top-16 z-40 -mx-4 px-4 py-4 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60 border-b border-border">
-          <div className="space-y-4">
-            <SearchBar onSearch={onSearch} />
-            <CategoryFilters onCategoryChange={onCategoryChange} />
-          </div>
+        <div className="sticky top-16 z-40 -mx-4 border-b border-border bg-background/95 px-4 py-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
+          <SearchBar onSearch={onSearch} />
         </div>
 
         <motion.div
@@ -451,24 +350,53 @@ export function ProductGrid({
           </span>
         </motion.div>
 
-        <motion.div
-          variants={containerVariants}
-          initial="hidden"
-          animate="visible"
-          className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-5"
-        >
-          {filteredCatalog.map((product) => (
-            <motion.div key={product.id} variants={itemVariants}>
-              <ProductCard
-                product={product}
-                onProductClick={onProductClick}
-                onAddToCart={onAddToCart}
-              />
-            </motion.div>
-          ))}
-        </motion.div>
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-[280px_1fr]">
+          <div className="lg:sticky lg:top-32 lg:self-start">
+            <ProductFilter
+              categoryTree={categoryTree}
+              selection={filterSelection}
+              isLoading={isCategoryLoading}
+              onFilterChange={handleFilterChange}
+            />
+          </div>
 
-        {filteredCatalog.length === 0 && (
+          <motion.div
+            variants={containerVariants}
+            initial="hidden"
+            animate="visible"
+            className="grid grid-cols-1 gap-5 sm:grid-cols-2 xl:grid-cols-3"
+          >
+            {isCatalogLoading ? (
+              Array.from({ length: 9 }).map((_, index) => (
+                <div
+                  key={`catalog-skeleton-${index}`}
+                  className="overflow-hidden rounded-xl border border-border bg-card"
+                >
+                  <Skeleton className="aspect-square w-full rounded-none" />
+                  <div className="space-y-3 p-4">
+                    <Skeleton className="h-3 w-20" />
+                    <Skeleton className="h-10 w-full" />
+                    <Skeleton className="h-5 w-28" />
+                    <Skeleton className="h-6 w-24" />
+                    <Skeleton className="h-9 w-full rounded-lg" />
+                  </div>
+                </div>
+              ))
+            ) : (
+              filteredCatalog.map((product) => (
+                <motion.div key={product.id} variants={itemVariants}>
+                  <ProductCard
+                    product={product}
+                    onProductClick={onProductClick}
+                    onAddToCart={onAddToCart}
+                  />
+                </motion.div>
+              ))
+            )}
+          </motion.div>
+        </div>
+
+        {!isCatalogLoading && filteredCatalog.length === 0 && (
           <div className="text-center py-12">
             <p className="text-muted-foreground">No products found matching your criteria</p>
           </div>

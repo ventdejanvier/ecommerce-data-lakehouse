@@ -1,8 +1,7 @@
 import sys
 
 from pyspark.ml import Pipeline
-from pyspark.ml.feature import HashingTF, IDF, Normalizer, RegexTokenizer
-from pyspark.ml.functions import vector_to_array
+from pyspark.ml.feature import BucketedRandomProjectionLSH, HashingTF, IDF, Normalizer, RegexTokenizer
 from pyspark.sql import functions as F
 from pyspark.sql.window import Window
 
@@ -38,6 +37,7 @@ def export_content_based_recommendations():
             "category_sub",
             "category_detail",
         ) \
+        .limit(5000) \
         .filter(F.col("product_id").isNotNull()) \
         .dropDuplicates(["product_id"]) \
         .withColumn(
@@ -67,7 +67,7 @@ def export_content_based_recommendations():
             pattern="\\W+",
             minTokenLength=2,
         ),
-        HashingTF(inputCol="tokens", outputCol="raw_features", numFeatures=512),
+        HashingTF(inputCol="tokens", outputCol="raw_features", numFeatures=32),
         IDF(inputCol="raw_features", outputCol="tfidf_features"),
         Normalizer(inputCol="tfidf_features", outputCol="features", p=2.0),
     ])
@@ -78,64 +78,38 @@ def export_content_based_recommendations():
             "display_name",
             "brand",
             "category_main",
-            vector_to_array("features").alias("features"),
+            "category_sub",
+            "features",
         )
 
-    left = featured_products.select(
-        F.col("product_id").alias("source_product_id"),
-        F.col("display_name").alias("source_display_name"),
-        F.col("brand").alias("source_brand"),
-        F.col("category_main").alias("source_category_main"),
-        F.col("features").alias("source_features"),
+    lsh = BucketedRandomProjectionLSH(
+        inputCol="features",
+        outputCol="hashes",
+        bucketLength=1.0,
+        numHashTables=1,
     )
-    right = featured_products.select(
-        F.col("product_id").alias("recommended_product_id"),
-        F.col("display_name").alias("recommended_display_name"),
-        F.col("brand").alias("recommended_brand"),
-        F.col("category_main").alias("recommended_category_main"),
-        F.col("features").alias("recommended_features"),
-    )
+    lsh_model = lsh.fit(featured_products)
 
-    candidate_condition = (
-        (F.col("source_product_id") != F.col("recommended_product_id"))
-        & (
-            (
-                F.col("source_category_main").isNotNull()
-                & (F.col("source_category_main") == F.col("recommended_category_main"))
-            )
-            | (
-                F.col("source_brand").isNotNull()
-                & (F.col("source_brand") == F.col("recommended_brand"))
-            )
-        )
-    )
+    similar_pairs = lsh_model.approxSimilarityJoin(
+        featured_products,
+        featured_products,
+        2.0,
+        distCol="distance",
+    ) \
+        .filter(F.col("datasetA.product_id") != F.col("datasetB.product_id")) \
+        .withColumn("score", 1.0 / (1.0 + F.col("distance")))
 
-    scored_pairs = left.join(right, candidate_condition) \
-        .withColumn(
-            "score",
-            F.expr(
-                """
-                aggregate(
-                    zip_with(source_features, recommended_features, (x, y) -> x * y),
-                    cast(0.0 as double),
-                    (acc, value) -> acc + value
-                )
-                """
-            ),
-        ) \
-        .filter(F.col("score").isNotNull() & (F.col("score") >= 0))
+    rank_window = Window.partitionBy(F.col("datasetA.product_id")) \
+        .orderBy(F.desc("score"), F.asc(F.col("datasetB.product_id")))
 
-    rank_window = Window.partitionBy("source_product_id") \
-        .orderBy(F.desc("score"), F.asc("recommended_product_id"))
-
-    recommendations = scored_pairs \
+    recommendations = similar_pairs \
         .withColumn("rank", F.row_number().over(rank_window)) \
         .filter(F.col("rank") <= 10) \
         .select(
-            "source_product_id",
-            "recommended_product_id",
-            "source_display_name",
-            "recommended_display_name",
+            F.col("datasetA.product_id").alias("source_product_id"),
+            F.col("datasetB.product_id").alias("recommended_product_id"),
+            F.col("datasetA.display_name").alias("source_display_name"),
+            F.col("datasetB.display_name").alias("recommended_display_name"),
             F.round("score", 6).alias("score"),
             "rank",
         ) \

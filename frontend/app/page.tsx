@@ -11,6 +11,8 @@ import { CartSheet } from '@/components/cart-sheet';
 import { TelemetryWidget } from '@/components/telemetry-widget';
 import { Product } from '@/components/product-card';
 import { logPageView } from '@/lib/tracking';
+import { fetchRecommendations, useMLStore } from '@/lib/ml-store';
+import { useAuthStore } from '@/lib/auth-store';
 import { Toaster } from '@/components/ui/toaster';
 import { useToast } from '@/hooks/use-toast';
 import { Activity, Zap } from 'lucide-react';
@@ -18,15 +20,17 @@ import { Activity, Zap } from 'lucide-react';
 export default function Home() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
-  const [activeCategory, setActiveCategory] = useState('all');
+  const user = useAuthStore((state) => state.user);
   const { toast } = useToast();
 
   // Log page view on mount
   useEffect(() => {
     logPageView('dashboard', {
-      initialCategory: activeCategory,
+      initialCategory: 'all',
       hasSearchQuery: false,
     });
+    // Load global popular recommendations immediately when homepage opens.
+    void fetchRecommendations(null, false);
   }, []);
 
   const handleSearch = (query: string) => {
@@ -38,9 +42,8 @@ export default function Home() {
   };
 
   const handleCategoryChange = (categoryId: string) => {
-    setActiveCategory(categoryId);
     toast({
-      title: 'Category Changed',
+      title: 'Filter Changed',
       description: `Filtering by: ${categoryId}. Check console for telemetry.`,
     });
   };
@@ -61,6 +64,16 @@ export default function Home() {
     logPageView('dashboard', {
       returnedFromProduct: true,
     });
+  };
+
+  const handleAiToggle = (enabled: boolean) => {
+    if (enabled) {
+      void fetchRecommendations(user?.id ?? 'YOUR_USER_ID_HERE', true);
+      return;
+    }
+
+    // Back to default global-popular list when AI is turned off.
+    void fetchRecommendations(null, false);
   };
 
   return (
@@ -128,9 +141,9 @@ export default function Home() {
                 onProductClick={handleProductClick}
                 onAddToCart={handleAddToCart}
                 searchQuery={searchQuery}
-                activeCategory={activeCategory}
                 onSearch={handleSearch}
                 onCategoryChange={handleCategoryChange}
+                onAiToggle={handleAiToggle}
               />
             </motion.div>
           )}

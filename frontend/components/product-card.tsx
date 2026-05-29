@@ -15,6 +15,7 @@ export interface Product {
   rating: number;
   reviewCount: number;
   category: string;
+  brand?: string;
   imageUrl?: string;
   inStock: boolean;
 }

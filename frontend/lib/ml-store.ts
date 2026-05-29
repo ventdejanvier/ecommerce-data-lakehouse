@@ -4,9 +4,10 @@ import { create } from 'zustand';
 import { logEvent } from './tracking';
 
 export interface AIRecommendation {
-  cluster_id: number;
-  product_id: number;
-  display_name: string;
+  id: string;
+  name: string;
+  price: number;
+  category: string;
   cluster_total_score: number;
 }
 
@@ -71,3 +72,32 @@ export const useMLStore = create<MLState>((set, get) => ({
     });
   },
 }));
+
+export const fetchRecommendations = async (
+  userId: string | null,
+  isAiEnabled: boolean
+) => {
+  const { setRecommendations, setLoading } = useMLStore.getState();
+  setLoading(true);
+  try {
+    const demoUserId = "1515915625540660259"; 
+     
+    const endpoint = isAiEnabled
+      ? `http://localhost:8000/api/recommend/home/${demoUserId}`
+      : `http://localhost:8000/api/recommend/global`;
+
+    const response = await fetch(endpoint);
+    if (!response.ok) {
+      console.warn("Lỗi API, hiển thị mảng rỗng");
+      setRecommendations([]); 
+      return;
+    }
+    const data: AIRecommendation[] = await response.json();
+    setRecommendations(data);
+  } catch (error) {
+    console.error('Lỗi:', error);
+    setRecommendations([]); 
+  } finally {
+    setLoading(false);
+  }
+};

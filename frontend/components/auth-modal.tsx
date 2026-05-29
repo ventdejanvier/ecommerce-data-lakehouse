@@ -150,7 +150,7 @@ export function AuthModal() {
 
           <div className="p-6 pt-4">
             <AnimatePresence mode="wait">
-              <TabsContent value="login" className="mt-0 focus-visible:outline-none" asChild>
+              <TabsContent key="login-tab" value="login" className="mt-0 focus-visible:outline-none" asChild>
                 <motion.div
                   key="login-form"
                   initial={{ opacity: 0, x: -10 }}
@@ -215,7 +215,7 @@ export function AuthModal() {
                 </motion.div>
               </TabsContent>
 
-              <TabsContent value="signup" className="mt-0 focus-visible:outline-none" asChild>
+              <TabsContent key="signup-tab" value="signup" className="mt-0 focus-visible:outline-none" asChild>
                 <motion.div
                   key="signup-form"
                   initial={{ opacity: 0, x: 10 }}
