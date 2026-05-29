@@ -82,8 +82,9 @@ export const fetchRecommendations = async (
   try {
     const demoUserId = "1515915625540660259"; 
      
+    const mlEnabledParam = String(Boolean(isAiEnabled));
     const endpoint = isAiEnabled
-      ? `http://localhost:8000/api/recommend/home/${demoUserId}`
+      ? `http://localhost:8000/api/recommend/home/${demoUserId}?is_ml_enabled=${mlEnabledParam}`
       : `http://localhost:8000/api/recommend/global`;
 
     const response = await fetch(endpoint);
