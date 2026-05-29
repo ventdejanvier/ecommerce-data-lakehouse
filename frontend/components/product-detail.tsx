@@ -1,18 +1,36 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { ArrowLeft, ShoppingCart, Heart, Share2, Star, Truck, Shield, RotateCcw, Smartphone, Laptop, Headphones, Watch, Monitor, Gamepad2 } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { Separator } from '@/components/ui/separator';
+import { Skeleton } from '@/components/ui/skeleton';
+import { ArrowLeft, ShoppingCart, Heart, Share2, Star, Truck, Shield, RotateCcw, Smartphone, Laptop, Headphones, Watch, Monitor, Gamepad2, Sparkles } from 'lucide-react';
 import { logEvent } from '@/lib/tracking';
 import { useCartStore } from '@/lib/cart-store';
 import { Product } from './product-card';
+
+const BACKEND_API_BASE_URL = (
+  process.env.NEXT_PUBLIC_BACKEND_API_URL ?? 'http://localhost:8000'
+).replace(/\/$/, '');
 
 interface ProductDetailProps {
   product: Product;
   onBack?: () => void;
   onAddToCart?: (product: Product) => void;
+}
+
+interface SimilarProductResponse {
+  id?: string;
+  name?: string;
+  product_id?: string | number;
+  display_name?: string;
+  price?: number;
+  category?: string;
+  category_name?: string;
+  cluster_total_score?: number;
 }
 
 const categoryIcons: Record<string, React.ElementType> = {
@@ -26,6 +44,8 @@ const categoryIcons: Record<string, React.ElementType> = {
 
 export function ProductDetail({ product, onBack, onAddToCart }: ProductDetailProps) {
   const { addItem, openCart } = useCartStore();
+  const [similarProducts, setSimilarProducts] = useState<Product[]>([]);
+  const [isLoadingSimilar, setIsLoadingSimilar] = useState(false);
 
   // Log product view on mount
   useEffect(() => {
@@ -39,6 +59,67 @@ export function ProductDetail({ product, onBack, onAddToCart }: ProductDetailPro
       viewDuration: 0,
     });
   }, [product]);
+
+  useEffect(() => {
+    let isMounted = true;
+
+    const mapSimilarProduct = (item: SimilarProductResponse): Product | null => {
+      const rawId = item.id ?? item.product_id;
+      if (rawId === undefined || rawId === null) {
+        return null;
+      }
+
+      const id = String(rawId);
+      const score = Number(item.cluster_total_score ?? 1);
+
+      return {
+        id,
+        name: String(item.name ?? item.display_name ?? `Product ${id}`),
+        price: Number(item.price ?? 0),
+        rating: 4.5,
+        reviewCount: Math.max(1, Math.round(score)),
+        category: String(item.category ?? item.category_name ?? 'Recommended'),
+        inStock: true,
+      };
+    };
+
+    const fetchSimilarProducts = async () => {
+      setIsLoadingSimilar(true);
+      try {
+        const response = await fetch(
+          `${BACKEND_API_BASE_URL}/api/recommend/product/${encodeURIComponent(product.id)}`,
+          { cache: 'no-store' }
+        );
+        if (!response.ok) {
+          throw new Error(`Failed to fetch similar products: ${response.status}`);
+        }
+
+        const data = (await response.json()) as SimilarProductResponse[];
+        if (isMounted) {
+          setSimilarProducts(
+            data
+              .map(mapSimilarProduct)
+              .filter((item): item is Product => item !== null && item.id !== product.id)
+          );
+        }
+      } catch (error) {
+        console.error('Failed to fetch similar products:', error);
+        if (isMounted) {
+          setSimilarProducts([]);
+        }
+      } finally {
+        if (isMounted) {
+          setIsLoadingSimilar(false);
+        }
+      }
+    };
+
+    void fetchSimilarProducts();
+
+    return () => {
+      isMounted = false;
+    };
+  }, [product.id]);
 
   const handleBack = () => {
     logEvent('back_click', {
@@ -255,6 +336,71 @@ export function ProductDetail({ product, onBack, onAddToCart }: ProductDetailPro
           </p>
         </CardContent>
       </Card>
+
+      <Separator className="my-8" />
+
+      <section className="space-y-4">
+        <div>
+          <h2 className="text-lg font-semibold text-foreground">Similar Products</h2>
+          <p className="text-sm text-muted-foreground">Content-based recommendations for this item</p>
+        </div>
+
+        {isLoadingSimilar ? (
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            {Array.from({ length: 4 }).map((_, index) => (
+              <div
+                key={`similar-skeleton-${index}`}
+                className="overflow-hidden rounded-lg border border-border bg-card"
+              >
+                <Skeleton className="aspect-[4/3] w-full rounded-none" />
+                <div className="space-y-2 p-3">
+                  <Skeleton className="h-3 w-16" />
+                  <Skeleton className="h-9 w-full" />
+                  <Skeleton className="h-5 w-20" />
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : similarProducts.length > 0 ? (
+          <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
+            {similarProducts.map((similarProduct) => {
+              const SimilarIcon = categoryIcons[similarProduct.category] || Smartphone;
+
+              return (
+                <motion.div
+                  key={similarProduct.id}
+                  whileHover={{ y: -3 }}
+                  transition={{ type: 'spring', stiffness: 300, damping: 22 }}
+                  className="overflow-hidden rounded-lg border border-border bg-card"
+                >
+                  <div className="relative flex aspect-[4/3] items-center justify-center bg-muted">
+                    <SimilarIcon className="h-12 w-12 text-muted-foreground/40" />
+                    <Badge className="absolute left-2 top-2 gap-1 text-[10px]">
+                      <Sparkles className="h-3 w-3" />
+                      Similar
+                    </Badge>
+                  </div>
+                  <div className="space-y-2 p-3">
+                    <p className="text-[10px] uppercase text-muted-foreground">
+                      {similarProduct.category}
+                    </p>
+                    <h3 className="line-clamp-2 min-h-10 text-sm font-medium text-foreground">
+                      {similarProduct.name}
+                    </h3>
+                    <p className="text-sm font-semibold text-foreground">
+                      ${similarProduct.price.toFixed(2)}
+                    </p>
+                  </div>
+                </motion.div>
+              );
+            })}
+          </div>
+        ) : (
+          <div className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">
+            No similar products available yet.
+          </div>
+        )}
+      </section>
     </div>
   );
 }

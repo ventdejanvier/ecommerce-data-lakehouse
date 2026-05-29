@@ -6,6 +6,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from database import (
     get_categories_and_brands_from_db,
     get_categories_from_db,
+    get_content_based_recommendations,
+    get_dim_product_price_expr,
     get_products_from_db,
     get_recommendations_with_fallback,
 )
@@ -35,11 +37,12 @@ def get_global_recommendations():
     from sqlalchemy import text
     try:
         with engine.connect() as connection:
-            query = """
+            price_expr = get_dim_product_price_expr(connection, alias="p", coalesce=True)
+            query = f"""
             SELECT 
                 g.product_id::text AS id,
                 p.display_name AS name,
-                25.50 AS price,
+                {price_expr} AS price,
                 p.category_main AS category,
                 10.0 AS cluster_total_score
             FROM public.global_popular g
@@ -51,11 +54,12 @@ def get_global_recommendations():
     except Exception as e:
         # Fallback: Nếu bảng global_popular lỗi, tự động lấy 10 sản phẩm ngẫu nhiên
         with engine.connect() as connection:
-            query = """
+            price_expr = get_dim_product_price_expr(connection, coalesce=True)
+            query = f"""
             SELECT 
                 product_id::text AS id,
                 display_name AS name,
-                25.50 AS price,
+                {price_expr} AS price,
                 category_main AS category,
                 10.0 AS cluster_total_score
             FROM public.dim_products
@@ -91,6 +95,14 @@ def get_home_recommendations(user_id: str, is_ml_enabled: bool = False):
     else:
         # Gọi tên hàm lấy dữ liệu cá nhân hóa
         return get_recommendations_from_db(user_id)
+
+
+@app.get("/api/recommend/product/{product_id}")
+def get_product_recommendations(
+    product_id: str,
+    limit: int = Query(default=4, ge=1, le=20),
+) -> list[dict[str, Any]]:
+    return get_content_based_recommendations(product_id, limit=limit)
 
 
 @app.get("/api/categories", response_model=list[CategoryResponse])
