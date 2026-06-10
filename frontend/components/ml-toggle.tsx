@@ -62,7 +62,6 @@ export function MLToggle() {
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="als">ALS (Collaborative Filtering)</SelectItem>
-              <SelectItem value="content_based">Content-Based Filtering</SelectItem>
               <SelectItem value="cluster">K-Means (Cluster Profiling)</SelectItem>
             </SelectContent>
           </Select>
