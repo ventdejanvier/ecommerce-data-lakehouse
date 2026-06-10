@@ -4,13 +4,12 @@ import { useEffect, useState } from 'react';
 import { motion } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
-import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ArrowLeft, ShoppingCart, Heart, Share2, Star, Truck, Shield, RotateCcw, Smartphone, Laptop, Headphones, Watch, Monitor, Gamepad2, Sparkles } from 'lucide-react';
+import { ArrowLeft, ShoppingCart, Heart, Share2, Star, Truck, Shield, RotateCcw, Smartphone, Laptop, Headphones, Watch, Monitor, Gamepad2 } from 'lucide-react';
 import { logEvent } from '@/lib/tracking';
 import { useCartStore } from '@/lib/cart-store';
-import { Product } from './product-card';
+import { Product, ProductCard } from './product-card';
 
 const BACKEND_API_BASE_URL = (
   process.env.NEXT_PUBLIC_BACKEND_API_URL ?? 'http://localhost:8000'
@@ -20,6 +19,7 @@ interface ProductDetailProps {
   product: Product;
   onBack?: () => void;
   onAddToCart?: (product: Product) => void;
+  onProductClick?: (product: Product) => void;
 }
 
 interface SimilarProductResponse {
@@ -42,7 +42,7 @@ const categoryIcons: Record<string, React.ElementType> = {
   Gaming: Gamepad2,
 };
 
-export function ProductDetail({ product, onBack, onAddToCart }: ProductDetailProps) {
+export function ProductDetail({ product, onBack, onAddToCart, onProductClick }: ProductDetailProps) {
   const { addItem, openCart } = useCartStore();
   const [similarProducts, setSimilarProducts] = useState<Product[]>([]);
   const [isLoadingSimilar, setIsLoadingSimilar] = useState(false);
@@ -363,37 +363,15 @@ export function ProductDetail({ product, onBack, onAddToCart }: ProductDetailPro
           </div>
         ) : similarProducts.length > 0 ? (
           <div className="grid grid-cols-2 gap-4 md:grid-cols-4">
-            {similarProducts.map((similarProduct) => {
-              const SimilarIcon = categoryIcons[similarProduct.category] || Smartphone;
-
-              return (
-                <motion.div
-                  key={similarProduct.id}
-                  whileHover={{ y: -3 }}
-                  transition={{ type: 'spring', stiffness: 300, damping: 22 }}
-                  className="overflow-hidden rounded-lg border border-border bg-card"
-                >
-                  <div className="relative flex aspect-[4/3] items-center justify-center bg-muted">
-                    <SimilarIcon className="h-12 w-12 text-muted-foreground/40" />
-                    <Badge className="absolute left-2 top-2 gap-1 text-[10px]">
-                      <Sparkles className="h-3 w-3" />
-                      Similar
-                    </Badge>
-                  </div>
-                  <div className="space-y-2 p-3">
-                    <p className="text-[10px] uppercase text-muted-foreground">
-                      {similarProduct.category}
-                    </p>
-                    <h3 className="line-clamp-2 min-h-10 text-sm font-medium text-foreground">
-                      {similarProduct.name}
-                    </h3>
-                    <p className="text-sm font-semibold text-foreground">
-                      ${similarProduct.price.toFixed(2)}
-                    </p>
-                  </div>
-                </motion.div>
-              );
-            })}
+            {similarProducts.map((similarProduct) => (
+              <ProductCard
+                key={similarProduct.id}
+                product={similarProduct}
+                isAiPicked
+                onProductClick={onProductClick}
+                onAddToCart={onAddToCart}
+              />
+            ))}
           </div>
         ) : (
           <div className="rounded-lg border border-dashed border-border p-4 text-sm text-muted-foreground">

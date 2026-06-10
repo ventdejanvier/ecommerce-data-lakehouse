@@ -51,21 +51,24 @@ export const useMLStore = create<MLState>((set, get) => ({
   },
 
   setMlStrategy: (strategy: string) => {
-    if (strategy === get().mlStrategy) {
-      return;
-    }
+    const previousStrategy = get().mlStrategy;
+    
+    if (strategy !== previousStrategy) {
+      set({ mlStrategy: strategy });
 
-    set({ mlStrategy: strategy });
+      // Explicitly log the strategy change to fix N/A telemetry issues
+      logEvent('ML_STRATEGY_CHANGE', {
+        strategy: strategy,
+        previousStrategy: previousStrategy,
+        context: 'strategy_dropdown',
+        timestamp: new Date().toISOString()
+      });
 
-    logEvent('ML_TOGGLE', {
-      action: 'strategy_changed',
-      strategy,
-      timestamp: new Date().toISOString(),
-      context: 'recommendation_engine',
-    });
-
-    if (get().isAiEnabled) {
-      void fetchRecommendations(null, true);
+      // Auto-fetch new recommendations when strategy changes
+      const isAiEnabled = get().isAiEnabled;
+      if (isAiEnabled) {
+        void fetchRecommendations(null, true);
+      }
     }
   },
 

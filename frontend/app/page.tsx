@@ -96,6 +96,7 @@ export default function Home() {
                 product={selectedProduct}
                 onBack={handleBackToProducts}
                 onAddToCart={handleAddToCart}
+                onProductClick={handleProductClick}
               />
             </motion.div>
           ) : (

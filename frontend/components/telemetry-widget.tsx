@@ -86,6 +86,8 @@ export function TelemetryWidget() {
         return `Items: ${payload.itemCount || 0}`;
       case 'ML_TOGGLE':
         return `Enabled: ${payload.enabled ?? 'N/A'}`;
+      case 'ML_STRATEGY_CHANGE':
+        return `Strategy: ${payload.previousStrategy || 'N/A'} -> ${payload.strategy || 'N/A'}`;
       default:
         return JSON.stringify(payload).slice(0, 50);
     }
