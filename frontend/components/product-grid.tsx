@@ -13,6 +13,13 @@ import { Sparkles, Grid3X3 } from 'lucide-react';
 import { type AIRecommendation, useMLStore } from '@/lib/ml-store';
 import { Switch } from '@/components/ui/switch';
 import { Skeleton } from '@/components/ui/skeleton';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 
 const BACKEND_API_BASE_URL = (
   process.env.NEXT_PUBLIC_BACKEND_API_URL ?? 'http://localhost:8000'
@@ -65,6 +72,8 @@ export function ProductGrid({
     isAiEnabled,
     aiRecommendations,
     isLoading,
+    mlStrategy,
+    setMlStrategy,
     toggleML,
     setLoading,
   } = useMLStore();
@@ -217,7 +226,7 @@ export function ProductGrid({
           </div>
           
           {/* ML Toggle - positioned next to section title */}
-          <div className="flex items-center gap-3 px-4 py-2 rounded-full bg-primary/5 border border-primary/20">
+          <div className="flex flex-wrap items-center gap-3 rounded-full border border-primary/20 bg-primary/5 px-4 py-2">
             <div className="flex items-center gap-2">
               <Sparkles 
                 className={`h-4 w-4 transition-colors duration-300 ${
@@ -225,25 +234,40 @@ export function ProductGrid({
                 }`} 
               />
               <span className="text-sm font-medium text-foreground">
-                K-Means Model
+                AI Model
               </span>
             </div>
-            
-            <Switch
-              checked={isAiEnabled}
-              onCheckedChange={handleAiToggle}
-              className="data-[state=checked]:bg-primary"
-            />
-            
-            {isAiEnabled && !isLoading && (
-              <motion.span
-                initial={{ opacity: 0, scale: 0.8 }}
-                animate={{ opacity: 1, scale: 1 }}
-                className="text-xs text-primary font-medium"
-              >
-                Active
-              </motion.span>
-            )}
+
+            <div className="flex items-center gap-3">
+              <Switch
+                checked={isAiEnabled}
+                onCheckedChange={handleAiToggle}
+                className="data-[state=checked]:bg-primary"
+              />
+
+              {isAiEnabled && (
+                <Select value={mlStrategy} onValueChange={setMlStrategy}>
+                  <SelectTrigger size="sm" className="w-[250px] bg-background">
+                    <SelectValue placeholder="Select ML strategy" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="als">ALS (Collaborative Filtering)</SelectItem>
+                    <SelectItem value="content_based">Content-Based Filtering</SelectItem>
+                    <SelectItem value="cluster">K-Means (Cluster Profiling)</SelectItem>
+                  </SelectContent>
+                </Select>
+              )}
+
+              {isAiEnabled && !isLoading && (
+                <motion.span
+                  initial={{ opacity: 0, scale: 0.8 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  className="text-xs font-medium text-primary"
+                >
+                  Active
+                </motion.span>
+              )}
+            </div>
           </div>
         </motion.div>
 

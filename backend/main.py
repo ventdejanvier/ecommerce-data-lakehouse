@@ -10,9 +10,11 @@ from database import (
     get_dim_product_price_expr,
     get_item_based_recommendations,
     get_products_from_db,
+    get_recommendations_by_strategy,
     get_recommendations_with_fallback,
 )
 from kafka_producer import produce_event
+from redis_client import add_recent_category, get_recent_categories
 from schemas import (
     CartRecommendRequest,
     CategoryResponse,
@@ -24,6 +26,15 @@ app = FastAPI()
 
 # Backward-compatible name for tests/legacy monkeypatching.
 get_recommendations_from_db = get_recommendations_with_fallback
+
+SESSION_CATEGORY_EVENT_TYPES = {"product_click", "product_view"}
+SESSION_CATEGORY_FIELDS = (
+    "category",
+    "category_main",
+    "productCategory",
+    "product_category",
+    "categoryName",
+)
 
 app.add_middleware(
     CORSMiddleware,
@@ -83,20 +94,78 @@ def send_to_kafka_background(data: dict[str, Any]) -> None:
         print(f"Kafka tạm thời không kết nối được (không sao cả): {e}")
 
 
+def extract_session_category(data: dict[str, Any]) -> str | None:
+    for field in SESSION_CATEGORY_FIELDS:
+        category = data.get(field)
+        if category is None:
+            continue
+
+        normalized_category = str(category).strip()
+        if normalized_category:
+            return normalized_category
+
+    return None
+
+
+def capture_recent_category(data: dict[str, Any]) -> None:
+    event_type = data.get("eventType")
+    user_id = data.get("userId")
+    if event_type not in SESSION_CATEGORY_EVENT_TYPES or not user_id:
+        return
+
+    category = extract_session_category(data)
+    if category:
+        add_recent_category(str(user_id), category)
+
+
+def rerank_by_recent_categories(
+    products: list[dict[str, Any]],
+    recent_categories: set[str],
+) -> list[dict[str, Any]]:
+    if not recent_categories:
+        return products
+
+    normalized_recent_categories = {
+        str(category).strip()
+        for category in recent_categories
+        if str(category).strip()
+    }
+    if not normalized_recent_categories:
+        return products
+
+    products.sort(
+        key=lambda product: (
+            1
+            if str(product.get("category", "")).strip() in normalized_recent_categories
+            or str(product.get("category_main", "")).strip() in normalized_recent_categories
+            else 0
+        ),
+        reverse=True,
+    )
+    return products
+
+
 @app.post("/api/track")
 def track_event(data: dict[str, Any], background_tasks: BackgroundTasks) -> dict[str, str]:
     # Đẩy tác vụ gửi vào Kafka ra background để API phản hồi ngay.
+    capture_recent_category(data)
     background_tasks.add_task(send_to_kafka_background, data)
     return {"status": "ok"}
 
 @app.get("/api/recommend/home/{user_id}")
-def get_home_recommendations(user_id: str, is_ml_enabled: bool = False):
+def get_home_recommendations(
+    user_id: str,
+    is_ml_enabled: bool = False,
+    strategy: str = Query(default="als"),
+):
     if not is_ml_enabled:
         # Gọi tên hàm lấy dữ liệu global
         return get_global_recommendations()
     else:
         # Gọi tên hàm lấy dữ liệu cá nhân hóa
-        return get_recommendations_from_db(user_id)
+        products = list(get_recommendations_by_strategy(user_id, strategy))
+        recent_categories = get_recent_categories(user_id)
+        return rerank_by_recent_categories(products, recent_categories)
 
 
 @app.get("/api/recommend/product/{product_id}")

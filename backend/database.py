@@ -704,6 +704,36 @@ def get_recommendations_with_fallback(user_id: str, limit: int = MAX_RECOMMENDAT
         return _fetch_emergency_recommendations(connection, limit)
 
 
+def get_recommendations_by_strategy(
+    user_id: str,
+    strategy: str = "als",
+    limit: int = 10,
+) -> list[dict[str, Any]]:
+    strategy_key = strategy.strip().lower()
+    products: list[dict[str, Any]] = []
+
+    with engine.connect() as connection:
+        if strategy_key == "als":
+            products = [
+                _normalize_recommendation(row)
+                for row in _fetch_user_recommendations_from_als(connection, user_id, limit)
+            ]
+        elif strategy_key == "content_based":
+            products = [
+                _normalize_recommendation(row)
+                for row in _fetch_user_recommendations_from_content_based(connection, user_id, limit)
+            ]
+        elif strategy_key in {"cluster", "kmeans"}:
+            cluster_id = _fetch_user_cluster_id(connection, user_id)
+            if cluster_id is not None:
+                products = _fetch_cluster_recommendations(connection, cluster_id, limit)
+
+    if products:
+        return products
+
+    return get_recommendations_with_fallback(user_id, limit)
+
+
 def get_recommendations_from_db(user_id: str) -> list[dict[str, Any]]:
     # Backward-compatible alias for existing imports/tests.
     return get_recommendations_with_fallback(user_id)
