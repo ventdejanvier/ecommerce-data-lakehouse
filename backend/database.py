@@ -274,6 +274,73 @@ def _fetch_user_recommendations_from_content_based(
     return [dict(row) for row in result]
 
 
+def _fetch_content_based_dim_product_fallback(
+    connection: Connection,
+    product_id: str,
+    limit: int,
+) -> list[dict[str, Any]]:
+    columns = _get_public_table_columns(connection, "dim_products")
+    if not columns:
+        return []
+
+    product_id_col = _resolve_column(columns, PRODUCT_ID_COLUMNS)
+    category_col = _resolve_column(columns, ("category_main",)) or _resolve_column(
+        columns,
+        PRODUCT_CATEGORY_COLUMNS,
+    )
+    name_col = _resolve_column(columns, PRODUCT_NAME_COLUMNS)
+    if not product_id_col or not category_col:
+        return []
+
+    product_expr = _qualified_column("p", product_id_col)
+    category_expr = _qualified_column("p", category_col)
+    name_expr = _qualified_column("p", name_col) if name_col else "NULL"
+    price_expr = get_dim_product_price_expr(connection, alias="p", coalesce=True)
+    display_expr = f"COALESCE({name_expr}, 'Product ' || {product_expr}::text)"
+
+    category = connection.execute(
+        text(
+            f"""
+            SELECT {category_expr} AS category_main
+            FROM {table_ref("dim_products")} p
+            WHERE {product_expr}::text = :product_id
+              AND {category_expr} IS NOT NULL
+              AND TRIM({category_expr}::text) <> ''
+            LIMIT 1
+            """
+        ),
+        {"product_id": product_id},
+    ).scalar_one_or_none()
+    if not category:
+        return []
+
+    rows = connection.execute(
+        text(
+            f"""
+            SELECT
+                0 AS cluster_id,
+                {product_expr} AS product_id,
+                {display_expr} AS display_name,
+                0.0 AS cluster_total_score,
+                {price_expr} AS price,
+                {category_expr} AS category_name
+            FROM {table_ref("dim_products")} p
+            WHERE {category_expr}::text = :category_main
+              AND {product_expr}::text <> :product_id
+              AND {product_expr} IS NOT NULL
+            ORDER BY {product_expr} ASC
+            LIMIT :limit
+            """
+        ),
+        {
+            "category_main": str(category),
+            "product_id": product_id,
+            "limit": max(1, limit),
+        },
+    ).mappings().all()
+    return [_normalize_recommendation_response(dict(row)) for row in rows]
+
+
 def get_content_based_recommendations(
     product_id: str,
     limit: int = 4,
@@ -281,7 +348,7 @@ def get_content_based_recommendations(
     with engine.connect() as connection:
         columns = _get_public_table_columns(connection, "serving_content_based")
         if not columns:
-            return []
+            return _fetch_content_based_dim_product_fallback(connection, product_id, limit)
 
         source_col = _resolve_column(columns, ("source_product_id", "product_id"))
         product_col = _resolve_column(
@@ -293,7 +360,7 @@ def get_content_based_recommendations(
         rank_col = _resolve_column(columns, ("rank", "recommendation_rank"))
 
         if not source_col or not product_col or not score_col:
-            return []
+            return _fetch_content_based_dim_product_fallback(connection, product_id, limit)
 
         source_expr = _qualified_column("r", source_col)
         product_expr = _qualified_column("r", product_col)
@@ -332,7 +399,11 @@ def get_content_based_recommendations(
             query,
             {"product_id": product_id, "limit": limit},
         ).mappings().all()
-        return [_normalize_recommendation_response(dict(row)) for row in rows]
+        products = [_normalize_recommendation_response(dict(row)) for row in rows]
+        if not products:
+            return _fetch_content_based_dim_product_fallback(connection, product_id, limit)
+
+        return products
 
 
 def get_item_based_recommendations(

@@ -1,6 +1,7 @@
 "use client";
 
 import { create } from 'zustand';
+import { useAuthStore } from './auth-store';
 import { logEvent } from './tracking';
 
 export interface AIRecommendation {
@@ -74,17 +75,17 @@ export const useMLStore = create<MLState>((set, get) => ({
 }));
 
 export const fetchRecommendations = async (
-  userId: string | null,
+  _userId: string | null,
   isAiEnabled: boolean
 ) => {
   const { setRecommendations, setLoading } = useMLStore.getState();
   setLoading(true);
   try {
-    const demoUserId = "1515915625540660259"; 
-     
+    const currentUserId = useAuthStore.getState().user?.id;
+    const hasLoggedInUser = typeof currentUserId === 'string' && currentUserId.length > 0;
     const mlEnabledParam = String(Boolean(isAiEnabled));
-    const endpoint = isAiEnabled
-      ? `http://localhost:8000/api/recommend/home/${demoUserId}?is_ml_enabled=${mlEnabledParam}`
+    const endpoint = isAiEnabled && hasLoggedInUser
+      ? `http://localhost:8000/api/recommend/home/${encodeURIComponent(currentUserId)}?is_ml_enabled=${mlEnabledParam}`
       : `http://localhost:8000/api/recommend/global`;
 
     const response = await fetch(endpoint);

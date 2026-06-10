@@ -1,6 +1,7 @@
 'use client';
 
 import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
 
 interface User {
   id: string;
@@ -12,11 +13,13 @@ interface User {
 interface AuthState {
   user: User | null;
   isLoginModalOpen: boolean;
+  hasHydrated: boolean;
   login: (email: string, password: string) => User;
   loginWithGoogle: () => User;
   logout: () => void;
   openLoginModal: () => void;
   closeLoginModal: () => void;
+  setHasHydrated: (status: boolean) => void;
 }
 
 // Mock user generator
@@ -27,26 +30,41 @@ const generateMockUser = (email: string): User => ({
   avatar: undefined,
 });
 
-export const useAuthStore = create<AuthState>((set) => ({
-  user: null,
-  isLoginModalOpen: false,
+export const useAuthStore = create<AuthState>()(
+  persist(
+    (set) => ({
+      user: null,
+      isLoginModalOpen: false,
+      hasHydrated: false,
 
-  login: (email: string) => {
-    const user = generateMockUser(email);
-    set({ user, isLoginModalOpen: false });
-    return user;
-  },
+      login: (email: string) => {
+        const user = generateMockUser(email);
+        set({ user, isLoginModalOpen: false });
+        return user;
+      },
 
-  loginWithGoogle: () => {
-    const user = generateMockUser('user@gmail.com');
-    set({ user, isLoginModalOpen: false });
-    return user;
-  },
+      loginWithGoogle: () => {
+        const user = generateMockUser('user@gmail.com');
+        set({ user, isLoginModalOpen: false });
+        return user;
+      },
 
-  logout: () => {
-    set({ user: null });
-  },
+      logout: () => {
+        set({ user: null });
+      },
 
-  openLoginModal: () => set({ isLoginModalOpen: true }),
-  closeLoginModal: () => set({ isLoginModalOpen: false }),
-}));
+      openLoginModal: () => set({ isLoginModalOpen: true }),
+      closeLoginModal: () => set({ isLoginModalOpen: false }),
+      setHasHydrated: (status: boolean) => set({ hasHydrated: status }),
+    }),
+    {
+      name: 'ecommerce-auth-storage',
+      partialize: (state) => ({ user: state.user }),
+      onRehydrateStorage: () => (state) => {
+        state?.setHasHydrated(true);
+      },
+    }
+  )
+);
+
+export const hasAuthStoreHydrated = () => useAuthStore.persist.hasHydrated();
