@@ -9,31 +9,64 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select';
 import { useAuthStore } from '@/lib/auth-store';
 import { logEvent } from '@/lib/tracking';
-import { User } from 'lucide-react';
+
+const DEMO_PERSONAS = [
+  { id: '1515915625355805313', name: 'Champions (Cluster 1)', desc: 'VIP, high spend' },
+  { id: '1515915625353561691', name: 'Loyal Customers (Cluster 2)', desc: 'Regular buyers' },
+  { id: '1515915625353226922', name: 'At Risk (Cluster 3)', desc: 'Churn risk' },
+  { id: '1515915625353236157', name: 'Recent Browsers (Cluster 0)', desc: 'Window shoppers' },
+  { id: 'FRESH_USER', name: 'Fresh User (Cold Start)', desc: 'New dynamic ID for real-time demo' },
+];
+
+const resolveDemoPersona = (
+  selectedPersonaId: string,
+  timestamp: number,
+) => {
+  const selectedPersona =
+    DEMO_PERSONAS.find((persona) => persona.id === selectedPersonaId) ?? DEMO_PERSONAS[0];
+
+  if (selectedPersona.id === 'FRESH_USER') {
+    return {
+      finalUserId: `NEW_${timestamp}`,
+      finalUserName: 'Demo Cold Start',
+    };
+  }
+
+  return {
+    finalUserId: selectedPersona.id,
+    finalUserName: selectedPersona.name,
+  };
+};
 
 export function AuthModal() {
   const { isLoginModalOpen, closeLoginModal } = useAuthStore();
-  const [inputUserId, setInputUserId] = useState('');
+  const [selectedPersonaId, setSelectedPersonaId] = useState<string>(DEMO_PERSONAS[0].id);
 
   const resetForm = () => {
-    setInputUserId('');
+    setSelectedPersonaId(DEMO_PERSONAS[0].id);
   };
 
   const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
 
-    const trimmedUserId = inputUserId.trim();
-    if (!trimmedUserId) {
-      return;
-    }
+    const { finalUserId, finalUserName } = resolveDemoPersona(
+      selectedPersonaId,
+      Date.now(),
+    );
 
     const mockUser = {
-      id: trimmedUserId,
-      name: `Demo User (${trimmedUserId.slice(-4)})`,
+      id: finalUserId,
+      name: finalUserName,
       email: 'demo@lakehouse.local',
     };
 
@@ -43,10 +76,10 @@ export function AuthModal() {
     });
 
     logEvent('LOGIN_SUCCESS', {
-      userId: mockUser.id,
+      userId: finalUserId,
       email: mockUser.email,
-      name: mockUser.name,
-      method: 'demo_user_id',
+      name: finalUserName,
+      method: 'demo_persona',
       timestamp: new Date().toISOString(),
     });
 
@@ -78,37 +111,38 @@ export function AuthModal() {
             transition={{ duration: 0.15 }}
           >
             <div className="space-y-2">
-              <Label htmlFor="demo-user-id" className="text-sm font-medium text-foreground">
-                User ID (from Training Data)
+              <Label htmlFor="demo-persona" className="text-sm font-medium text-foreground">
+                Demo Persona
               </Label>
-              <div className="relative">
-                <User className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  id="demo-user-id"
-                  type="text"
-                  inputMode="numeric"
-                  autoComplete="off"
-                  placeholder="e.g., 1515915625540660259"
-                  value={inputUserId}
-                  onChange={(e) => setInputUserId(e.target.value)}
-                  className="pl-10 bg-muted border-border focus:border-foreground/20"
-                  required
-                />
-              </div>
+              <Select value={selectedPersonaId} onValueChange={setSelectedPersonaId}>
+                <SelectTrigger id="demo-persona" className="w-full bg-muted border-border">
+                  <SelectValue placeholder="Choose a demo persona" />
+                </SelectTrigger>
+                <SelectContent>
+                  {DEMO_PERSONAS.map((persona) => (
+                    <SelectItem key={persona.id} value={persona.id}>
+                      <div className="flex flex-col gap-0.5">
+                        <span>{persona.name}</span>
+                        <span className="text-xs text-muted-foreground">{persona.desc}</span>
+                      </div>
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
 
             <motion.div whileHover={{ scale: 1.01 }} whileTap={{ scale: 0.99 }}>
               <Button
                 type="submit"
                 className="w-full bg-primary text-primary-foreground hover:bg-primary/90"
-                disabled={!inputUserId.trim()}
+                disabled={!selectedPersonaId}
               >
                 Start Demo Session
               </Button>
             </motion.div>
 
             <p className="text-xs leading-relaxed text-muted-foreground">
-              💡 Hint: Paste a User ID from the Postgres `serving_als` or `serving_predictions` table to inspect personalized recommendation variations.
+              Hint: Choose Fresh User to generate a disposable cold-start ID without reusing cached persona behavior.
             </p>
           </motion.form>
         </div>
