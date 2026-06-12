@@ -24,15 +24,6 @@ const normalizeCategoryKey = (category: string): string =>
     .replace(/[^a-z0-9]+/g, '_')
     .replace(/^_+|_+$/g, '');
 
-export const getDynamicImageUrl = (
-  category: string,
-  productId: string | number
-): string => {
-  const normalizedCategory = normalizeCategoryKey(category) || 'uncategorized';
-  const numericLock = String(productId).replace(/\D/g, '').slice(-5) || '1';
-  return `https://loremflickr.com/320/240/product,device,isolated,${normalizedCategory}?lock=${numericLock}`;
-};
-
 export const getLocalFallbackUrl = (category: string): string => {
   const categoryKey = normalizeCategoryKey(category);
   return CATEGORY_IMAGE_MAP[categoryKey] ?? CATEGORY_IMAGE_MAP.uncategorized;

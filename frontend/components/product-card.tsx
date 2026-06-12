@@ -8,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { ShoppingCart, Star, TrendingUp } from 'lucide-react';
 import { logEvent } from '@/lib/tracking';
 import { useCartStore } from '@/lib/cart-store';
-import { getDynamicImageUrl, getLocalFallbackUrl } from '@/utils/image-fallback';
+import { getLocalFallbackUrl } from '@/utils/image-fallback';
 
 export interface Product {
   id: string;
@@ -92,18 +92,12 @@ export function ProductCard({
     : 0;
 
   const productCategory = product.category_main || product.category;
-  const productId = product.product_id ?? product.id;
-  const primarySrc =
-    product.imageUrl ||
-    product.image_url ||
-    getDynamicImageUrl(productCategory, productId);
-  const fallbackSrc = getLocalFallbackUrl(productCategory);
+  const productImage =
+    product.imageUrl || product.image_url || getLocalFallbackUrl(productCategory);
 
   useEffect(() => {
     setImgError(false);
-  }, [primarySrc]);
-
-  const productImage = imgError ? fallbackSrc : primarySrc;
+  }, [productImage]);
 
   return (
     <motion.div
@@ -116,7 +110,7 @@ export function ProductCard({
       {/* Image Area */}
       <div className="relative aspect-square bg-muted flex items-center justify-center overflow-hidden">
         <Image
-          src={productImage}
+          src={imgError ? '/images/categories/uncategorized.jpg' : productImage}
           alt={product.name}
           fill
           sizes="(min-width: 1280px) 25vw, (min-width: 640px) 50vw, 100vw"
