@@ -1,5 +1,6 @@
 'use client';
 
+import { useEffect, useState } from 'react';
 import Image from 'next/image';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
@@ -7,7 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { ShoppingCart, Star, TrendingUp } from 'lucide-react';
 import { logEvent } from '@/lib/tracking';
 import { useCartStore } from '@/lib/cart-store';
-import { resolveProductImage } from '@/utils/image-fallback';
+import { getDynamicImageUrl, getLocalFallbackUrl } from '@/utils/image-fallback';
 
 export interface Product {
   id: string;
@@ -39,6 +40,7 @@ export function ProductCard({
   onAddToCart,
 }: ProductCardProps) {
   const { addItem, openCart } = useCartStore();
+  const [imgError, setImgError] = useState(false);
 
   const handleCardClick = () => {
     logEvent('product_click', {
@@ -89,11 +91,19 @@ export function ProductCard({
     ? Math.round((1 - product.price / product.originalPrice) * 100) 
     : 0;
 
-  const productImage = resolveProductImage(
-    product.imageUrl ?? product.image_url ?? null,
-    product.category_main ?? product.category,
-    product.product_id ?? product.id
-  );
+  const productCategory = product.category_main || product.category;
+  const productId = product.product_id ?? product.id;
+  const primarySrc =
+    product.imageUrl ||
+    product.image_url ||
+    getDynamicImageUrl(productCategory, productId);
+  const fallbackSrc = getLocalFallbackUrl(productCategory);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [primarySrc]);
+
+  const productImage = imgError ? fallbackSrc : primarySrc;
 
   return (
     <motion.div
@@ -111,6 +121,7 @@ export function ProductCard({
           fill
           sizes="(min-width: 1280px) 25vw, (min-width: 640px) 50vw, 100vw"
           className="object-cover transition-transform duration-500 group-hover:scale-105"
+          onError={() => setImgError(true)}
         />
         <div className="absolute inset-0 bg-gradient-to-t from-background/10 to-transparent" />
         
