@@ -100,18 +100,14 @@ export const useMLStore = create<MLState>((set, get) => ({
 }));
 
 export const fetchRecommendations = async (
-  _userId: string | null,
+  userId: string | null,
   isAiEnabled: boolean
 ) => {
   const { mlStrategy, setRecommendations, setLoading } = useMLStore.getState();
   setLoading(true);
   try {
-    const currentUserId = useAuthStore.getState().user?.id;
-    const hasLoggedInUser = typeof currentUserId === 'string' && currentUserId.length > 0;
-    const mlEnabledParam = String(Boolean(isAiEnabled));
-    const endpoint = isAiEnabled && hasLoggedInUser
-      ? `http://localhost:8000/api/recommend/home/${encodeURIComponent(currentUserId)}?is_ml_enabled=${mlEnabledParam}&strategy=${encodeURIComponent(mlStrategy)}`
-      : `http://localhost:8000/api/recommend/global`;
+    const activeUserId = userId || useAuthStore.getState().user?.id || '1515915625355805313';
+    const endpoint = `http://localhost:8000/api/recommend/home/${encodeURIComponent(activeUserId)}?is_ml_enabled=${String(Boolean(isAiEnabled))}&strategy=${encodeURIComponent(mlStrategy)}`;
 
     const response = await fetch(endpoint, { cache: 'no-store' });
     if (!response.ok) {

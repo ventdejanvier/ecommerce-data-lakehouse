@@ -30,7 +30,7 @@ export default function Home() {
       initialCategory: 'all',
       hasSearchQuery: false,
     });
-    // Load global popular recommendations immediately when homepage opens.
+    // Load recommendations through the backend home endpoint so re-ranking can run.
     void fetchRecommendations(null, false);
   }, []);
 
@@ -70,12 +70,12 @@ export default function Home() {
 
   const handleAiToggle = (enabled: boolean) => {
     if (enabled) {
-      void fetchRecommendations(user?.id ?? 'YOUR_USER_ID_HERE', true);
+      void fetchRecommendations(user?.id || '1515915625355805313', true);
       return;
     }
 
-    // Back to default global-popular list when AI is turned off.
-    void fetchRecommendations(null, false);
+    // Keep using the home endpoint so backend re-ranking still applies.
+    void fetchRecommendations(user?.id || '1515915625355805313', false);
   };
 
   return (
