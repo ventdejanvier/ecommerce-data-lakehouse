@@ -1,5 +1,5 @@
 const INVALID_IMAGE_VALUES = new Set(['', 'null', 'undefined', 'nan', 'none']);
-const ALLOWED_REMOTE_IMAGE_HOSTS = new Set(['picsum.photos']);
+const ALLOWED_REMOTE_IMAGE_HOSTS = new Set(['picsum.photos', 'loremflickr.com']);
 
 export const CATEGORY_IMAGE_MAP: Record<string, string> = {
   recommended: '/placeholder.jpg',
@@ -54,7 +54,6 @@ export const resolveProductImage = (
     return categoryImage;
   }
 
-  const seedSource = String(productId || categoryKey || 'product').trim();
-  const seed = encodeURIComponent(seedSource || 'product');
-  return `https://picsum.photos/seed/${seed}/320/240`;
+  const numericLock = String(productId).replace(/\D/g, '').slice(-5) || '1';
+  return `https://loremflickr.com/320/240/tech,${categoryKey}?lock=${numericLock}`;
 };
