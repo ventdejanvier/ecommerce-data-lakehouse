@@ -206,7 +206,8 @@ def get_home_recommendations(
         products = list(get_recommendations_by_strategy(user_id, strategy))
 
     recent_categories = get_recent_categories(user_id)
-    return apply_category_reranking(products, recent_categories)
+    products = apply_category_reranking(products, recent_categories)
+    return products
 
 
 @app.get("/api/recommend/product/{product_id}")

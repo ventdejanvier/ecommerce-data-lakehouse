@@ -21,6 +21,7 @@ export default function Home() {
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const user = useAuthStore((state) => state.user);
+  const isAiEnabled = useMLStore((state) => state.isAiEnabled);
   const { toast } = useToast();
 
   // Log page view on mount
@@ -64,6 +65,7 @@ export default function Home() {
     logPageView('dashboard', {
       returnedFromProduct: true,
     });
+    void fetchRecommendations(user?.id ?? null, isAiEnabled);
   };
 
   const handleAiToggle = (enabled: boolean) => {

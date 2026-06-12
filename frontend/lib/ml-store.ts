@@ -113,7 +113,7 @@ export const fetchRecommendations = async (
       ? `http://localhost:8000/api/recommend/home/${encodeURIComponent(currentUserId)}?is_ml_enabled=${mlEnabledParam}&strategy=${encodeURIComponent(mlStrategy)}`
       : `http://localhost:8000/api/recommend/global`;
 
-    const response = await fetch(endpoint);
+    const response = await fetch(endpoint, { cache: 'no-store' });
     if (!response.ok) {
       console.warn("Lỗi API, hiển thị mảng rỗng");
       setRecommendations([]); 
