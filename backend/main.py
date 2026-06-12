@@ -1,3 +1,4 @@
+import logging
 from typing import Any 
 from sqlalchemy import text
 from database import engine
@@ -23,6 +24,7 @@ from schemas import (
 )
 
 app = FastAPI()
+logger = logging.getLogger(__name__)
 
 # Backward-compatible name for tests/legacy monkeypatching.
 get_recommendations_from_db = get_recommendations_with_fallback
@@ -108,14 +110,31 @@ def extract_session_category(data: dict[str, Any]) -> str | None:
 
 
 def capture_recent_category(data: dict[str, Any]) -> None:
-    event_type = data.get("eventType")
-    user_id = data.get("userId")
-    if event_type not in SESSION_CATEGORY_EVENT_TYPES or not user_id:
-        return
+    try:
+        event_type = str(data.get("eventType", "")).strip()
+        user_id = data.get("userId")
+        normalized_user_id = str(user_id).strip() if user_id is not None else ""
+        if event_type not in SESSION_CATEGORY_EVENT_TYPES:
+            return
+        if not normalized_user_id:
+            logger.info(
+                "Skipping recent category capture: missing userId eventId=%s",
+                data.get("eventId"),
+            )
+            return
 
-    category = extract_session_category(data)
-    if category:
-        add_recent_category(str(user_id), category)
+        category = extract_session_category(data)
+        if not category:
+            logger.info(
+                "Skipping recent category capture: missing category eventId=%s userId=%s",
+                data.get("eventId"),
+                normalized_user_id,
+            )
+            return
+
+        add_recent_category(normalized_user_id, category)
+    except Exception as exc:
+        logger.warning("Failed to capture recent category: %s", exc)
 
 
 def rerank_by_recent_categories(
@@ -148,9 +167,10 @@ def rerank_by_recent_categories(
 @app.post("/api/track")
 def track_event(data: dict[str, Any], background_tasks: BackgroundTasks) -> dict[str, str]:
     # Đẩy tác vụ gửi vào Kafka ra background để API phản hồi ngay.
-    capture_recent_category(data)
-    background_tasks.add_task(send_to_kafka_background, data)
-    return {"status": "ok"}
+    event_data = dict(data)
+    background_tasks.add_task(capture_recent_category, event_data)
+    background_tasks.add_task(send_to_kafka_background, event_data)
+    return {"status": "ok", "eventId": str(event_data.get("eventId", ""))}
 
 @app.get("/api/recommend/home/{user_id}")
 def get_home_recommendations(

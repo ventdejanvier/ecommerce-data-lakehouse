@@ -18,10 +18,17 @@ r = (
         port=6379,
         db=0,
         decode_responses=True,
+        socket_connect_timeout=0.2,
+        socket_timeout=0.2,
+        health_check_interval=30,
     )
     if redis is not None
     else None
 )
+
+
+def get_recent_categories_key(user_id: str) -> str:
+    return f"recent_categories:{user_id}"
 
 
 def add_recent_category(user_id: str, category: str) -> None:
@@ -31,9 +38,14 @@ def add_recent_category(user_id: str, category: str) -> None:
         return
 
     try:
-        key = f"session:{normalized_user_id}:categories"
+        key = get_recent_categories_key(normalized_user_id)
         r.sadd(key, normalized_category)
         r.expire(key, SESSION_CATEGORY_TTL_SECONDS)
+        logger.info(
+            "Stored recent category in Redis: key=%s category=%s",
+            key,
+            normalized_category,
+        )
     except redis.RedisError as exc:
         logger.warning("Redis unavailable while storing recent category: %s", exc)
 
@@ -44,7 +56,7 @@ def get_recent_categories(user_id: str) -> set[str]:
         return set()
 
     try:
-        return set(r.smembers(f"session:{normalized_user_id}:categories"))
+        return set(r.smembers(get_recent_categories_key(normalized_user_id)))
     except redis.RedisError as exc:
         logger.warning("Redis unavailable while reading recent categories: %s", exc)
         return set()

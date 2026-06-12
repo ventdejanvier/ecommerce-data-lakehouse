@@ -1,6 +1,9 @@
 // Telemetry utility for E-commerce Data Lakehouse
 // All events are logged with timestamps and sent via fire-and-forget HTTP POST
 
+import { useAuthStore } from "./auth-store";
+import { useMLStore } from "./ml-store";
+
 export type EventType =
   | "page_view"
   | "search"
@@ -64,17 +67,96 @@ const getSessionId = (): string => {
   return sessionId;
 };
 
+const normalizeUserId = (value: unknown): string | null => {
+  if (typeof value !== "string" && typeof value !== "number") {
+    return null;
+  }
+
+  const normalizedValue = String(value).trim();
+  return normalizedValue.length > 0 ? normalizedValue : null;
+};
+
+const getActiveTrackingUserId = (payloadUserId: unknown): string => {
+  const explicitUserId = normalizeUserId(payloadUserId);
+  if (explicitUserId) {
+    return explicitUserId;
+  }
+
+  try {
+    const mlState = useMLStore.getState() as {
+      isAiEnabled?: boolean;
+      isMLEnabled?: boolean;
+      userId?: unknown;
+      mlUserId?: unknown;
+      activeUserId?: unknown;
+      selectedUserId?: unknown;
+      selectedPersonaId?: unknown;
+      persona?: { id?: unknown; userId?: unknown } | null;
+      user?: { id?: unknown; userId?: unknown } | null;
+    };
+
+    if (mlState.isAiEnabled || mlState.isMLEnabled) {
+      const mlUserId =
+        normalizeUserId(mlState.userId) ??
+        normalizeUserId(mlState.mlUserId) ??
+        normalizeUserId(mlState.activeUserId) ??
+        normalizeUserId(mlState.selectedUserId) ??
+        normalizeUserId(mlState.persona?.userId) ??
+        normalizeUserId(mlState.persona?.id) ??
+        normalizeUserId(mlState.user?.userId) ??
+        normalizeUserId(mlState.user?.id);
+
+      if (mlUserId) {
+        return mlUserId;
+      }
+    }
+  } catch (error) {
+    console.warn("[DataLakehouse] Unable to resolve ML tracking user:", error);
+  }
+
+  try {
+    return normalizeUserId(useAuthStore.getState().user?.id) ?? "anonymous";
+  } catch (error) {
+    console.warn("[DataLakehouse] Unable to resolve auth tracking user:", error);
+    return "anonymous";
+  }
+};
+
+const getEventCategory = (payload: EventPayload): string | null => {
+  const category =
+    payload.category ??
+    payload.category_main ??
+    payload.productCategory ??
+    payload.product_category ??
+    payload.categoryName;
+
+  return typeof category === "string" && category.trim()
+    ? category.trim()
+    : null;
+};
+
 /**
  * Log an event to the Data Lakehouse
  * Uses fire-and-forget async HTTP POST - does NOT block the UI
  */
 export function logEvent(type: EventType, payload: EventPayload = {}): void {
+  const userId = getActiveTrackingUserId(payload.userId);
+  const eventCategory = getEventCategory(payload);
+  const categoryFields =
+    type === "product_click" || type === "product_view"
+      ? {
+          ...(eventCategory ? { category: eventCategory, category_main: eventCategory } : {}),
+        }
+      : {};
+
   const enrichedPayload = {
     eventId: generateEventId(),
     timestamp: new Date().toISOString(),
     sessionId: getSessionId(),
     eventType: type,
     ...payload,
+    ...categoryFields,
+    userId,
     // Add browser context
     context: {
       userAgent:
@@ -99,9 +181,19 @@ export function logEvent(type: EventType, payload: EventPayload = {}): void {
       "Content-Type": "application/json",
     },
     body: JSON.stringify(enrichedPayload),
-  }).catch((error) => {
-    console.warn("Tracking API is unreachable:", error.message);
-  });
+  })
+    .then(async (response) => {
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        console.error("[DataLakehouse] Tracking API failed:", {
+          status: response.status,
+          body,
+        });
+      }
+    })
+    .catch((error) => {
+      console.error("Tracking API is unreachable:", error);
+    });
 }
 
 /**
