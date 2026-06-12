@@ -1,11 +1,13 @@
 'use client';
 
+import Image from 'next/image';
 import { motion } from 'framer-motion';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { ShoppingCart, Star, TrendingUp, Smartphone, Laptop, Headphones, Watch, Monitor, Gamepad2, Sparkles } from 'lucide-react';
+import { ShoppingCart, Star, TrendingUp } from 'lucide-react';
 import { logEvent } from '@/lib/tracking';
 import { useCartStore } from '@/lib/cart-store';
+import { resolveProductImage } from '@/utils/image-fallback';
 
 export interface Product {
   id: string;
@@ -15,8 +17,11 @@ export interface Product {
   rating: number;
   reviewCount: number;
   category: string;
+  category_main?: string;
   brand?: string;
-  imageUrl?: string;
+  imageUrl?: string | null;
+  image_url?: string | null;
+  product_id?: string | number;
   inStock: boolean;
 }
 
@@ -26,16 +31,6 @@ interface ProductCardProps {
   onProductClick?: (product: Product) => void;
   onAddToCart?: (product: Product) => void;
 }
-
-const categoryIcons: Record<string, React.ElementType> = {
-  Smartphones: Smartphone,
-  Laptops: Laptop,
-  Audio: Headphones,
-  Wearables: Watch,
-  Monitors: Monitor,
-  Gaming: Gamepad2,
-  Recommended: Sparkles,
-};
 
 export function ProductCard({
   product,
@@ -94,7 +89,11 @@ export function ProductCard({
     ? Math.round((1 - product.price / product.originalPrice) * 100) 
     : 0;
 
-  const IconComponent = categoryIcons[product.category] || Smartphone;
+  const productImage = resolveProductImage(
+    product.imageUrl ?? product.image_url ?? null,
+    product.category_main ?? product.category,
+    product.product_id ?? product.id
+  );
 
   return (
     <motion.div
@@ -106,14 +105,14 @@ export function ProductCard({
     >
       {/* Image Area */}
       <div className="relative aspect-square bg-muted flex items-center justify-center overflow-hidden">
-        <motion.div
-          initial={{ scale: 1 }}
-          whileHover={{ scale: 1.1 }}
-          transition={{ duration: 0.4 }}
-          className="flex items-center justify-center"
-        >
-          <IconComponent className="h-16 w-16 text-muted-foreground/40" />
-        </motion.div>
+        <Image
+          src={productImage}
+          alt={product.name}
+          fill
+          sizes="(min-width: 1280px) 25vw, (min-width: 640px) 50vw, 100vw"
+          className="object-cover transition-transform duration-500 group-hover:scale-105"
+        />
+        <div className="absolute inset-0 bg-gradient-to-t from-background/10 to-transparent" />
         
         {/* Badges */}
         <div className="absolute top-3 left-3 flex flex-col gap-2">
