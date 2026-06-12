@@ -137,31 +137,51 @@ def capture_recent_category(data: dict[str, Any]) -> None:
         logger.warning("Failed to capture recent category: %s", exc)
 
 
+def normalize_category_for_reranking(value: Any) -> str:
+    if value is None:
+        return ""
+
+    normalized = str(value).strip().lower()
+    normalized = normalized.replace("_", " ").replace("-", " ")
+    return " ".join(normalized.split())
+
+
+def apply_category_reranking(
+    items: list[dict[str, Any]],
+    recent_categories: set[str],
+) -> list[dict[str, Any]]:
+    if not recent_categories:
+        return items
+
+    normalized_recent_categories = {
+        normalized_category
+        for category in recent_categories
+        if (normalized_category := normalize_category_for_reranking(category))
+    }
+    if not normalized_recent_categories:
+        return items
+
+    promoted_items: list[dict[str, Any]] = []
+    remaining_items: list[dict[str, Any]] = []
+
+    for item in items:
+        item_categories = {
+            normalize_category_for_reranking(item.get("category")),
+            normalize_category_for_reranking(item.get("category_main")),
+        }
+        if item_categories.intersection(normalized_recent_categories):
+            promoted_items.append(item)
+        else:
+            remaining_items.append(item)
+
+    return promoted_items + remaining_items
+
+
 def rerank_by_recent_categories(
     products: list[dict[str, Any]],
     recent_categories: set[str],
 ) -> list[dict[str, Any]]:
-    if not recent_categories:
-        return products
-
-    normalized_recent_categories = {
-        str(category).strip()
-        for category in recent_categories
-        if str(category).strip()
-    }
-    if not normalized_recent_categories:
-        return products
-
-    products.sort(
-        key=lambda product: (
-            1
-            if str(product.get("category", "")).strip() in normalized_recent_categories
-            or str(product.get("category_main", "")).strip() in normalized_recent_categories
-            else 0
-        ),
-        reverse=True,
-    )
-    return products
+    return apply_category_reranking(products, recent_categories)
 
 
 @app.post("/api/track")
@@ -180,12 +200,13 @@ def get_home_recommendations(
 ):
     if not is_ml_enabled:
         # Gọi tên hàm lấy dữ liệu global
-        return get_global_recommendations()
+        products = list(get_global_recommendations())
     else:
         # Gọi tên hàm lấy dữ liệu cá nhân hóa
         products = list(get_recommendations_by_strategy(user_id, strategy))
-        recent_categories = get_recent_categories(user_id)
-        return rerank_by_recent_categories(products, recent_categories)
+
+    recent_categories = get_recent_categories(user_id)
+    return apply_category_reranking(products, recent_categories)
 
 
 @app.get("/api/recommend/product/{product_id}")
