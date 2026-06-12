@@ -206,7 +206,23 @@ def get_home_recommendations(
         products = list(get_recommendations_by_strategy(user_id, strategy))
 
     recent_categories = get_recent_categories(user_id)
-    products = apply_category_reranking(products, recent_categories)
+    normalized_recent_categories = {
+        normalized_category
+        for category in recent_categories
+        if (normalized_category := normalize_category_for_reranking(category))
+    }
+    for cat in normalized_recent_categories:
+        products.extend(get_products_from_db(selected_category_main=cat, limit=3)[:3])
+
+    unique_products_by_id: dict[str, dict[str, Any]] = {}
+    for product in products:
+        product_id = product.get("id") or product.get("product_id")
+        if product_id is None:
+            continue
+        unique_products_by_id.setdefault(str(product_id), product)
+
+    unique_products = list(unique_products_by_id.values())
+    products = apply_category_reranking(unique_products, recent_categories)
     return products
 
 
