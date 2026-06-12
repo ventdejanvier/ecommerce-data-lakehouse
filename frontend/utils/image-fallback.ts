@@ -1,59 +1,37 @@
-const INVALID_IMAGE_VALUES = new Set(['', 'null', 'undefined', 'nan', 'none']);
-const ALLOWED_REMOTE_IMAGE_HOSTS = new Set(['picsum.photos', 'loremflickr.com']);
-
 export const CATEGORY_IMAGE_MAP: Record<string, string> = {
-  recommended: '/placeholder.jpg',
+  accessories: '/images/categories/accessories.jpg',
+  apparel: '/images/categories/apparel.jpg',
+  appliances: '/images/categories/appliances.jpg',
+  auto: '/images/categories/auto.jpg',
+  computers: '/images/categories/computers.jpg',
+  construction: '/images/categories/construction.jpg',
+  country_yard: '/images/categories/country_yard.jpg',
+  electronics: '/images/categories/electronics.jpg',
+  furniture: '/images/categories/furniture.jpg',
+  jewelry: '/images/categories/jewelry.jpg',
+  kids: '/images/categories/kids.jpg',
+  medicine: '/images/categories/medicine.jpg',
+  sport: '/images/categories/sport.jpg',
+  stationery: '/images/categories/stationery.jpg',
+  uncategorized: '/images/categories/uncategorized.jpg',
 };
 
 const normalizeCategoryKey = (category: string): string =>
   category
     .trim()
     .toLowerCase()
-    .replace(/&/g, 'and')
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '');
-
-const resolveValidImageUrl = (imageUrl: string | null): string | null => {
-  const trimmedUrl = imageUrl?.trim() ?? '';
-  if (INVALID_IMAGE_VALUES.has(trimmedUrl.toLowerCase())) {
-    return null;
-  }
-
-  if (trimmedUrl.startsWith('/')) {
-    return trimmedUrl;
-  }
-
-  try {
-    const parsedUrl = new URL(trimmedUrl);
-    if (
-      parsedUrl.protocol === 'https:' &&
-      ALLOWED_REMOTE_IMAGE_HOSTS.has(parsedUrl.hostname)
-    ) {
-      return trimmedUrl;
-    }
-  } catch {
-    return null;
-  }
-
-  return null;
-};
+    .replace(/&/g, ' ')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
 
 export const resolveProductImage = (
   imageUrl: string | null,
   category: string,
   productId: string | number
 ): string => {
-  const validImageUrl = resolveValidImageUrl(imageUrl);
-  if (validImageUrl) {
-    return validImageUrl;
-  }
+  void imageUrl;
+  void productId;
 
   const categoryKey = normalizeCategoryKey(category);
-  const categoryImage = CATEGORY_IMAGE_MAP[categoryKey];
-  if (categoryImage) {
-    return categoryImage;
-  }
-
-  const numericLock = String(productId).replace(/\D/g, '').slice(-5) || '1';
-  return `https://loremflickr.com/320/240/tech,${categoryKey}?lock=${numericLock}`;
+  return CATEGORY_IMAGE_MAP[categoryKey] ?? CATEGORY_IMAGE_MAP.uncategorized;
 };
