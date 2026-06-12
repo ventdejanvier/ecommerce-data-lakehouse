@@ -26,42 +26,26 @@ def export_dataframe_to_postgres(df, table_name: str, jdbc_url: str):
         .save()
 
 
-def first_existing_column(df, candidates: tuple[str, ...], role: str) -> str:
-    for column in candidates:
-        if column in df.columns:
-            return column
-
-    raise ValueError(
-        f"gold_db.recommendations_itembased is missing a column for {role}. "
-        f"Expected one of: {', '.join(candidates)}"
-    )
+def require_min_columns(cols: list[str], table_name: str) -> None:
+    if len(cols) < 3:
+        raise ValueError(
+            f"{table_name} must expose at least 3 columns: source item, similar item, score. "
+            f"Found columns: {cols}"
+        )
 
 
 def export_item_based_recommendations():
     spark = get_spark_session("Export_Item_Based_Recommendations")
 
-    gold_recommendations = spark.table("gold_db.recommendations_itembased")
-    source_col = first_existing_column(
-        gold_recommendations,
-        ("source_product_id", "product_id_1", "product_id"),
-        "source product",
-    )
-    similar_col = first_existing_column(
-        gold_recommendations,
-        ("similar_product_id", "recommended_product_id", "target_product_id", "product_id_2"),
-        "similar product",
-    )
-    score_col = first_existing_column(
-        gold_recommendations,
-        ("score", "similarity", "similarity_score", "cosine_similarity"),
-        "score",
-    )
+    item_similarity = spark.table("gold_db.item_similarity_matrix")
+    cols = item_similarity.columns
+    require_min_columns(cols, "gold_db.item_similarity_matrix")
 
-    recommendations = gold_recommendations \
+    recommendations = item_similarity \
         .select(
-            F.col(source_col).cast("string").alias("source_product_id"),
-            F.col(similar_col).cast("string").alias("similar_product_id"),
-            F.col(score_col).cast("double").alias("score"),
+            F.col(cols[0]).cast("string").alias("source_product_id"),
+            F.col(cols[1]).cast("string").alias("similar_product_id"),
+            F.col(cols[2]).cast("double").alias("score"),
         ) \
         .filter(
             F.col("source_product_id").isNotNull()
@@ -75,7 +59,7 @@ def export_item_based_recommendations():
         POSTGRES_URL,
     )
 
-    print("SUCCESS: Exported gold_db.recommendations_itembased to public.serving_item_based")
+    print("SUCCESS: Exported gold_db.item_similarity_matrix to public.serving_item_based")
 
 
 if __name__ == "__main__":
