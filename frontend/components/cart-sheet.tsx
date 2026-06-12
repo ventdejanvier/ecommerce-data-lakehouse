@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import Image from 'next/image';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
   Sheet,
@@ -16,6 +17,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { useCartStore } from '@/lib/cart-store';
 import { logEvent } from '@/lib/tracking';
 import { useToast } from '@/hooks/use-toast';
+import { getLocalFallbackUrl } from '@/utils/image-fallback';
 import type { Product } from '@/components/product-card';
 import {
   Plus,
@@ -23,12 +25,6 @@ import {
   Trash2,
   ShoppingBag,
   CreditCard,
-  Smartphone,
-  Laptop,
-  Headphones,
-  Watch,
-  Monitor,
-  Gamepad2,
   CheckCircle2,
   Loader2,
   Sparkles,
@@ -38,15 +34,6 @@ const BACKEND_API_BASE_URL = (
   process.env.NEXT_PUBLIC_BACKEND_API_URL ?? 'http://localhost:8000'
 ).replace(/\/$/, '');
 
-const categoryIcons: Record<string, React.ElementType> = {
-  Smartphones: Smartphone,
-  Laptops: Laptop,
-  Audio: Headphones,
-  Wearables: Watch,
-  Monitors: Monitor,
-  Gaming: Gamepad2,
-};
-
 interface CartRecommendationResponse {
   id?: string;
   name?: string;
@@ -54,8 +41,41 @@ interface CartRecommendationResponse {
   display_name?: string;
   price?: number | string;
   category?: string;
+  category_main?: string;
   category_name?: string;
+  imageUrl?: string | null;
+  image_url?: string | null;
   cluster_total_score?: number;
+}
+
+interface CartProductImageProps {
+  product: Product;
+  className: string;
+  sizes: string;
+}
+
+function CartProductImage({ product, className, sizes }: CartProductImageProps) {
+  const [imgError, setImgError] = useState(false);
+  const productCategory = product.category_main || product.category;
+  const productImage =
+    product.imageUrl || product.image_url || getLocalFallbackUrl(productCategory);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [productImage]);
+
+  return (
+    <div className={`relative shrink-0 overflow-hidden bg-muted ${className}`}>
+      <Image
+        src={imgError ? '/images/categories/uncategorized.jpg' : productImage}
+        alt={product.name}
+        fill
+        sizes={sizes}
+        className="object-cover"
+        onError={() => setImgError(true)}
+      />
+    </div>
+  );
 }
 
 export function CartSheet() {
@@ -100,7 +120,9 @@ export function CartSheet() {
         price: Number(item.price ?? 0),
         rating: 4.5,
         reviewCount: Math.max(1, Math.round(score)),
-        category: String(item.category ?? item.category_name ?? 'Recommended'),
+        category: String(item.category ?? item.category_main ?? item.category_name ?? 'Recommended'),
+        category_main: item.category_main ? String(item.category_main) : undefined,
+        imageUrl: item.imageUrl ?? item.image_url ?? null,
         inStock: true,
       };
     };
@@ -313,9 +335,7 @@ export function CartSheet() {
               </motion.div>
             ) : (
               <div className="space-y-4 px-1">
-                {cartItems.map((item) => {
-                  const IconComponent = categoryIcons[item.product.category] || Smartphone;
-                  return (
+                {cartItems.map((item) => (
                     <motion.div
                       key={item.product.id}
                       layout
@@ -324,10 +344,11 @@ export function CartSheet() {
                       exit={{ opacity: 0, x: -20 }}
                       className="flex gap-4 p-3 rounded-xl bg-muted/50 border border-border"
                     >
-                      {/* Product Icon */}
-                      <div className="flex h-16 w-16 items-center justify-center rounded-lg bg-background border border-border flex-shrink-0">
-                        <IconComponent className="h-8 w-8 text-muted-foreground" />
-                      </div>
+                      <CartProductImage
+                        product={item.product}
+                        className="h-16 w-16 rounded-lg border border-border"
+                        sizes="64px"
+                      />
 
                       {/* Product Info */}
                       <div className="flex-1 min-w-0">
@@ -375,8 +396,7 @@ export function CartSheet() {
                         </div>
                       </div>
                     </motion.div>
-                  );
-                })}
+                ))}
 
                 <Separator className="my-4" />
 
@@ -404,16 +424,16 @@ export function CartSheet() {
                     </div>
                   ) : cartRecommendations.length > 0 ? (
                     <div className="space-y-2">
-                      {cartRecommendations.map((product) => {
-                        const IconComponent = categoryIcons[product.category] || ShoppingBag;
-                        return (
+                      {cartRecommendations.map((product) => (
                           <div
                             key={product.id}
                             className="flex items-center gap-3 rounded-lg border border-border bg-background p-2"
                           >
-                            <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-md bg-muted">
-                              <IconComponent className="h-5 w-5 text-muted-foreground" />
-                            </div>
+                            <CartProductImage
+                              product={product}
+                              className="h-10 w-10 rounded-md"
+                              sizes="40px"
+                            />
                             <div className="min-w-0 flex-1">
                               <p className="truncate text-xs font-medium text-foreground">
                                 {product.name}
@@ -431,8 +451,7 @@ export function CartSheet() {
                               <Plus className="h-4 w-4" />
                             </Button>
                           </div>
-                        );
-                      })}
+                      ))}
                     </div>
                   ) : (
                     <p className="text-xs text-muted-foreground">

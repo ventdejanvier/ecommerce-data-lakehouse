@@ -1,15 +1,17 @@
 'use client';
 
 import { useEffect, useState } from 'react';
+import Image from 'next/image';
 import { motion } from 'framer-motion';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
-import { ArrowLeft, ShoppingCart, Heart, Share2, Star, Truck, Shield, RotateCcw, Smartphone, Laptop, Headphones, Watch, Monitor, Gamepad2 } from 'lucide-react';
+import { ArrowLeft, ShoppingCart, Heart, Share2, Star, Truck, Shield, RotateCcw } from 'lucide-react';
 import { logEvent } from '@/lib/tracking';
 import { useCartStore } from '@/lib/cart-store';
 import { Product, ProductCard } from './product-card';
+import { getLocalFallbackUrl } from '@/utils/image-fallback';
 
 const BACKEND_API_BASE_URL = (
   process.env.NEXT_PUBLIC_BACKEND_API_URL ?? 'http://localhost:8000'
@@ -33,19 +35,18 @@ interface SimilarProductResponse {
   cluster_total_score?: number;
 }
 
-const categoryIcons: Record<string, React.ElementType> = {
-  Smartphones: Smartphone,
-  Laptops: Laptop,
-  Audio: Headphones,
-  Wearables: Watch,
-  Monitors: Monitor,
-  Gaming: Gamepad2,
-};
-
 export function ProductDetail({ product, onBack, onAddToCart, onProductClick }: ProductDetailProps) {
   const { addItem, openCart } = useCartStore();
   const [similarProducts, setSimilarProducts] = useState<Product[]>([]);
   const [isLoadingSimilar, setIsLoadingSimilar] = useState(false);
+  const [imgError, setImgError] = useState(false);
+  const productCategory = product.category_main || product.category;
+  const productImage =
+    product.imageUrl || product.image_url || getLocalFallbackUrl(productCategory);
+
+  useEffect(() => {
+    setImgError(false);
+  }, [productImage]);
 
   // Log product view on mount
   useEffect(() => {
@@ -182,8 +183,6 @@ export function ProductDetail({ product, onBack, onAddToCart, onProductClick }: 
     ? Math.round((1 - product.price / product.originalPrice) * 100) 
     : 0;
 
-  const IconComponent = categoryIcons[product.category] || Smartphone;
-
   return (
     <div className="w-full max-w-4xl mx-auto">
       {/* Back Button */}
@@ -203,8 +202,16 @@ export function ProductDetail({ product, onBack, onAddToCart, onProductClick }: 
         <CardContent className="p-0">
           <div className="grid md:grid-cols-2 gap-0">
             {/* Image Section */}
-            <div className="aspect-square bg-muted flex items-center justify-center relative">
-              <IconComponent className="h-32 w-32 text-muted-foreground/30" />
+            <div className="relative aspect-square overflow-hidden bg-muted">
+              <Image
+                src={imgError ? '/images/categories/uncategorized.jpg' : productImage}
+                alt={product.name}
+                fill
+                sizes="(min-width: 768px) 50vw, 100vw"
+                className="object-cover"
+                onError={() => setImgError(true)}
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-background/10 to-transparent" />
               {discount > 0 && (
                 <span className="absolute top-4 left-4 bg-chart-3 text-white text-sm font-semibold px-3 py-1.5 rounded-lg">
                   -{discount}% OFF
