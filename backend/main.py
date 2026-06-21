@@ -1,12 +1,15 @@
 import logging
 import os
+from pathlib import Path
 import threading
 from contextlib import asynccontextmanager
 from typing import Any
 from dotenv import load_dotenv
 
 # MUST BE CALLED BEFORE ANY LOCAL IMPORTS
-load_dotenv()
+# Force absolute path to the backend directory's .env file
+env_path = Path(__file__).parent / ".env"
+load_dotenv(dotenv_path=env_path)
 
 from sqlalchemy import text
 from database import engine
