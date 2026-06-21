@@ -42,7 +42,15 @@ def warmup_database_caches():
     try:
         get_categories_from_db()
         get_global_recommendations()
-        get_recommendations_by_strategy("warmup_dummy_user", "als")
+        demo_personas = [
+            "1515915625355805313",  # Champions
+            "1515915625353561691",  # Loyal
+            "1515915625353226922",  # At Risk
+            "1515915625353236157",  # Browsers
+        ]
+        for pid in demo_personas:
+            get_recommendations_by_strategy(pid, "als")
+            get_recommendations_by_strategy(pid, "cluster")
         get_products_from_db(limit=1)
         logger.info("Database cache warmup completed.")
     except Exception as e:

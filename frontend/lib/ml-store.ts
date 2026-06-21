@@ -99,28 +99,48 @@ export const useMLStore = create<MLState>((set, get) => ({
   },
 }));
 
+let currentFetchController: AbortController | null = null;
+
 export const fetchRecommendations = async (
   userId: string | null,
   isAiEnabled: boolean
 ) => {
   const { mlStrategy, setRecommendations, setLoading } = useMLStore.getState();
   setLoading(true);
+  setRecommendations([]);
+
+  currentFetchController?.abort();
+  const controller = new AbortController();
+  currentFetchController = controller;
+
   try {
     const activeUserId = userId || useAuthStore.getState().user?.id || '1515915625355805313';
     const endpoint = `http://localhost:8000/api/recommend/home/${encodeURIComponent(activeUserId)}?is_ml_enabled=${String(Boolean(isAiEnabled))}&strategy=${encodeURIComponent(mlStrategy)}`;
 
-    const response = await fetch(endpoint, { cache: 'no-store' });
+    const response = await fetch(endpoint, {
+      cache: 'no-store',
+      signal: controller.signal,
+    });
     if (!response.ok) {
       console.warn("Lỗi API, hiển thị mảng rỗng");
-      setRecommendations([]); 
+      if (currentFetchController === controller) {
+        setRecommendations([]);
+      }
       return;
     }
     const data: AIRecommendation[] = await response.json();
-    setRecommendations(data);
+    if (currentFetchController === controller) {
+      setRecommendations(data);
+    }
   } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') return;
     console.error('Lỗi:', error);
-    setRecommendations([]); 
+    if (currentFetchController === controller) {
+      setRecommendations([]);
+    }
   } finally {
-    setLoading(false);
+    if (currentFetchController === controller) {
+      setLoading(false);
+    }
   }
 };
