@@ -30,9 +30,12 @@ export default function Home() {
       initialCategory: 'all',
       hasSearchQuery: false,
     });
-    // Load recommendations through the backend home endpoint so re-ranking can run.
-    void fetchRecommendations(null, false);
   }, []);
+
+  // Listen for authentication changes (login/logout/switch)
+  useEffect(() => {
+    void fetchRecommendations(user?.id ?? null, isAiEnabled);
+  }, [user?.id]); // Strictly depend on the primitive ID
 
   const handleSearch = (query: string) => {
     setSearchQuery(query);
