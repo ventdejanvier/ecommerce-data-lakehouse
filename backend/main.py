@@ -1,5 +1,13 @@
 import logging
-from typing import Any 
+import os
+import threading
+from contextlib import asynccontextmanager
+from typing import Any
+from dotenv import load_dotenv
+
+# MUST BE CALLED BEFORE ANY LOCAL IMPORTS
+load_dotenv()
+
 from sqlalchemy import text
 from database import engine
 from fastapi import BackgroundTasks, FastAPI, Query
@@ -23,8 +31,29 @@ from schemas import (
     RecommendationResponse,
 )
 
-app = FastAPI()
 logger = logging.getLogger(__name__)
+
+
+def warmup_database_caches():
+    logger.info("Starting database cache warmup...")
+    try:
+        get_categories_from_db()
+        get_global_recommendations()
+        get_recommendations_by_strategy("warmup_dummy_user", "als")
+        get_products_from_db(limit=1)
+        logger.info("Database cache warmup completed.")
+    except Exception as e:
+        logger.warning("Database cache warmup failed: %s", e)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Start the warmup in a separate daemon thread so it doesn't block startup
+    threading.Thread(target=warmup_database_caches, daemon=True).start()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 
 # Backward-compatible name for tests/legacy monkeypatching.
 get_recommendations_from_db = get_recommendations_with_fallback
