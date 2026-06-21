@@ -12,9 +12,20 @@ except ImportError:  # pragma: no cover - dependency is installed in the backend
 logger = logging.getLogger(__name__)
 SESSION_CATEGORY_TTL_SECONDS = 1800
 
+
+def resolve_redis_host() -> str:
+    env_host = os.getenv("REDIS_HOST")
+    if env_host:
+        return env_host
+    # Instant check for Docker container vs Local Windows
+    if os.path.exists("/.dockerenv"):
+        return "redis"
+    return "127.0.0.1"
+
+
 r = (
     redis.Redis(
-        host=os.getenv("REDIS_HOST", "redis"),
+        host=resolve_redis_host(),
         port=6379,
         db=0,
         decode_responses=True,
