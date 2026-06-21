@@ -205,7 +205,7 @@ def _fetch_user_recommendations_from_als(
             {category_expr} AS category_name
         FROM {table_ref("serving_als")} r
         {product_join}
-        WHERE {_qualified_column("r", user_col)} = :user_id
+        WHERE {_qualified_column("r", user_col)}::text = :user_id
           AND {product_expr} IS NOT NULL
           AND {score_expr} IS NOT NULL
         ORDER BY {order_clause}
@@ -263,7 +263,7 @@ def _fetch_user_recommendations_from_content_based(
             {category_expr} AS category_name
         FROM {table_ref("serving_content_based")} r
         {product_join}
-        WHERE {_qualified_column("r", user_col)} = :user_id
+        WHERE {_qualified_column("r", user_col)}::text = :user_id
           AND {product_expr} IS NOT NULL
           AND {score_expr} IS NOT NULL
         ORDER BY {order_clause}
@@ -525,7 +525,7 @@ def _fetch_user_cluster_id(connection: Connection, user_id: str) -> int | None:
             f"""
             SELECT {quote_identifier(cluster_col)}
             FROM {table_ref("serving_user_clusters")}
-            WHERE {quote_identifier(user_col)} = :user_id
+            WHERE {quote_identifier(user_col)}::text = :user_id
             LIMIT 1
             """
         ),
