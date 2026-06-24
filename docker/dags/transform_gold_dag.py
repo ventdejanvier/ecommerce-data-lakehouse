@@ -1,32 +1,31 @@
+from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.bash import BashOperator
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator 
-from datetime import datetime, timedelta
 
 default_args = {
-    'owner': 'admin',
-    'start_date': datetime(2020, 9, 24),
+    'owner': 'airflow',
+    'start_date': datetime(2023, 1, 1),
     'retries': 1,
+    'retry_delay': timedelta(minutes=2),
 }
 
-dag = DAG(
-    'transform_gold_dag',
+with DAG(
+    'lakehouse_silver_to_gold_pipeline',
     default_args=default_args,
-    schedule_interval=None,
+    schedule_interval="*/15 * * * *",
     catchup=False,
-    tags=['transformation', 'gold', 'star_schema']
-)
+    max_active_runs=1,
+    tags=['transformation', 'gold', 'ml', 'retraining']
+) as dag:
 
-run_gold = BashOperator(
-    task_id='run_silver_to_gold',
-    bash_command='docker exec -u root jupyter-notebook spark-submit --packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 /home/jovyan/scripts/transform_silver_to_gold.py',
-    dag=dag
-)
+    run_silver_to_gold = BashOperator(
+        task_id='run_silver_to_gold',
+        bash_command='docker exec jupyter-notebook spark-submit --packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 /home/jovyan/scripts/transform_silver_to_gold.py',
+    )
 
-trigger_analytics = TriggerDagRunOperator(
-    task_id='trigger_user_analytics',
-    trigger_dag_id='user_analytics_dag',  
-    dag=dag
-)
+    run_ml_retraining = BashOperator(
+        task_id='run_ml_retraining',
+        bash_command='docker exec jupyter-notebook spark-submit --packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 /home/jovyan/scripts/export_als_recommendations.py',
+    )
 
-run_gold >> trigger_analytics
+    run_silver_to_gold >> run_ml_retraining
