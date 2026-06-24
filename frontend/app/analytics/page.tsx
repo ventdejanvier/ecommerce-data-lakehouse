@@ -2,15 +2,8 @@
 
 import { motion } from 'framer-motion';
 import Link from 'next/link';
-import { ArrowLeft, BarChart3, PieChart, TrendingUp } from 'lucide-react';
+import { ArrowLeft, BarChart3 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from '@/components/ui/card';
 import { Navbar } from '@/components/navbar';
 import { AuthModal } from '@/components/auth-modal';
 import { CartSheet } from '@/components/cart-sheet';
@@ -19,7 +12,7 @@ import { TelemetryWidget } from '@/components/telemetry-widget';
 
 export default function AnalyticsPage() {
   return (
-    <div className="min-h-screen bg-background">
+    <div className="min-h-screen bg-background text-foreground">
       <Navbar />
       <AuthModal />
       <CartSheet />
@@ -45,95 +38,41 @@ export default function AnalyticsPage() {
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.4 }}
-          className="mb-10 space-y-2"
+          className="mb-8 space-y-3"
         >
           <div className="flex items-center gap-3">
             <div className="flex h-10 w-10 items-center justify-center rounded-xl bg-primary/10 border border-primary/20 text-primary">
               <BarChart3 className="h-5 w-5" />
             </div>
             <div>
-              <h1 className="text-3xl font-semibold tracking-tight text-foreground">
-                Data Lakehouse Analytics
+              <h1 className="text-3xl font-extrabold tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-blue-400 to-indigo-500">
+                Lakehouse Behavioral Analytics
               </h1>
-              <p className="text-muted-foreground text-sm">
-                Real-time Gold Layer Insights
-              </p>
+              <div className="flex items-center gap-2 mt-1">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                </span>
+                <p className="text-muted-foreground text-sm font-medium">
+                  Live Connection: Trino Query Engine via Gold Layer
+                </p>
+              </div>
             </div>
           </div>
         </motion.div>
 
-        {/* Dashboard Grid */}
+        {/* Dashboard View */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, delay: 0.1 }}
-          className="grid grid-cols-1 md:grid-cols-2 gap-8"
+          className="w-full min-h-[1000px] mt-6 bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl overflow-hidden relative ring-1 ring-white/5"
         >
-          {/* Zone 1: Cluster Distribution (Full Width) */}
-          <Card className="md:col-span-2 border-border shadow-sm bg-card/50 backdrop-blur-sm overflow-hidden animate-in">
-            <CardHeader className="flex flex-row items-center gap-4 space-y-0 pb-4">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary border border-primary/20">
-                <PieChart className="h-4 w-4" />
-              </div>
-              <div className="space-y-0.5">
-                <CardTitle className="text-lg">Cluster Distribution</CardTitle>
-                <CardDescription>Visualizing user clusters and segments across product categories</CardDescription>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="relative w-full h-[400px] bg-muted/20 border border-border/50 rounded-lg overflow-hidden">
-                <iframe
-                  src="about:blank"
-                  className="w-full h-full border-0 rounded-md"
-                  title="Cluster Distribution Chart"
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Zone 2: Top Trending Products (Half Width) */}
-          <Card className="border-border shadow-sm bg-card/50 backdrop-blur-sm overflow-hidden animate-in">
-            <CardHeader className="flex flex-row items-center gap-4 space-y-0 pb-4">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary border border-primary/20">
-                <TrendingUp className="h-4 w-4" />
-              </div>
-              <div className="space-y-0.5">
-                <CardTitle className="text-lg">Top Trending Products</CardTitle>
-                <CardDescription>Most popular items based on real-time stream interactions</CardDescription>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="relative w-full h-[400px] bg-muted/20 border border-border/50 rounded-lg overflow-hidden">
-                <iframe
-                  src="about:blank"
-                  className="w-full h-full border-0 rounded-md"
-                  title="Top Trending Products Chart"
-                />
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Zone 3: Recommendation Confidence Scores (Half Width) */}
-          <Card className="border-border shadow-sm bg-card/50 backdrop-blur-sm overflow-hidden animate-in">
-            <CardHeader className="flex flex-row items-center gap-4 space-y-0 pb-4">
-              <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/10 text-primary border border-primary/20">
-                <BarChart3 className="h-4 w-4" />
-              </div>
-              <div className="space-y-0.5">
-                <CardTitle className="text-lg">Recommendation Confidence Scores</CardTitle>
-                <CardDescription>Accuracy and confidence telemetry for recommendation strategies</CardDescription>
-              </div>
-            </CardHeader>
-            <CardContent>
-              <div className="relative w-full h-[400px] bg-muted/20 border border-border/50 rounded-lg overflow-hidden">
-                <iframe
-                  src="about:blank"
-                  className="w-full h-full border-0 rounded-md"
-                  title="Recommendation Confidence Scores Chart"
-                />
-              </div>
-            </CardContent>
-          </Card>
+          <iframe
+            src="http://localhost:3001/public/dashboard/d302d4cd-0406-4cad-a520-2ed114aaedb8#theme=night&bordered=false&titled=false"
+            className="w-full h-full min-h-[1000px] border-0"
+            title="Metabase Dashboard"
+          />
         </motion.div>
       </main>
 
