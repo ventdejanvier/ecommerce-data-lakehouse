@@ -21,6 +21,7 @@ dag = DAG(
     description='Luồng phân tích hành vi và phân cụm khách hàng',
     schedule_interval=None, # Chạy khi được gọi
     catchup=False,
+    max_active_runs=1,
     tags=['analytics', 'ml', 'kltn'],
 )
 
@@ -55,9 +56,4 @@ export_item_based_task = BashOperator(
     dag=dag,
 )
 
-run_kmeans_task >> [
-    generate_recommendations_task,
-    export_als_task,
-    export_content_based_task,
-    export_item_based_task,
-]
+run_kmeans_task >> generate_recommendations_task >> export_als_task >> export_content_based_task >> export_item_based_task
