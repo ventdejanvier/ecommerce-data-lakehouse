@@ -13,4 +13,5 @@ dependencies = [
     "sqlalchemy>=2.0.41",
     "uvicorn>=0.46.0",
     "python-dotenv>=1.2.2",
+    "minio>=7.2.20",
 ]
