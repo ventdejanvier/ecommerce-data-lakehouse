@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
+import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import {
   DropdownMenu,
@@ -10,7 +11,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { Cpu, User, UserCircle, Activity, ShoppingCart, LogOut } from 'lucide-react';
+import { Cpu, User, UserCircle, Activity, ShoppingCart, LogOut, BarChart3 } from 'lucide-react';
 import { logEvent } from '@/lib/tracking';
 import { useAuthStore } from '@/lib/auth-store';
 import { useCartStore } from '@/lib/cart-store';
@@ -113,6 +114,18 @@ export function Navbar() {
 
         {/* Right Section */}
         <div className="flex items-center gap-2">
+          {/* Analytics Link */}
+          <Link href="/analytics">
+            <Button className="hidden md:flex gap-2" size="sm" variant="ghost">
+              <BarChart3 className="h-4 w-4"/>
+              <span>Analytics</span>
+            </Button>
+            <Button className="flex md:hidden" size="icon" variant="ghost">
+              <BarChart3 className="h-4 w-4"/>
+              <span className="sr-only">Analytics</span>
+            </Button>
+          </Link>
+
           {/* Cart Button */}
           <motion.div whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }}>
             <Button
