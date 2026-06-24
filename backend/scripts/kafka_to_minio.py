@@ -26,8 +26,8 @@ def main():
     KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "product_events")
     
     MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
-    MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "minioadmin")
-    MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "minioadmin")
+    MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "admin")
+    MINIO_SECRET_KEY = os.getenv("MINIO_SECRET_KEY", "password")
     MINIO_SECURE = os.getenv("MINIO_SECURE", "False").lower() in ("true", "1", "yes")
     MINIO_BUCKET = os.getenv("MINIO_BUCKET", "bronze")
     
