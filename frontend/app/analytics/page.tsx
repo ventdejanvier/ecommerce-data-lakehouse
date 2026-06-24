@@ -69,7 +69,7 @@ export default function AnalyticsPage() {
           className="w-full min-h-[1000px] mt-6 bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl overflow-hidden relative ring-1 ring-white/5"
         >
           <iframe
-            src="http://localhost:3001/public/dashboard/d302d4cd-0406-4cad-a520-2ed114aaedb8#theme=night&bordered=false&titled=false"
+            src="http://localhost:3001/public/dashboard/d302d4cd-0406-4cad-a520-2ed114aaedb8#theme=transparent&bordered=false&titled=false"
             className="w-full h-full min-h-[1000px] border-0"
             title="Metabase Dashboard"
           />
