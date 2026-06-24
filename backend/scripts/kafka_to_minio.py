@@ -23,7 +23,7 @@ def main():
     # Load configurations from environment variables with safe fallbacks
     KAFKA_BOOTSTRAP_SERVERS = os.getenv("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
     KAFKA_GROUP_ID = os.getenv("KAFKA_GROUP_ID", "minio-ingest-consumer")
-    KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "product_events")
+    KAFKA_TOPIC = os.getenv("KAFKA_TOPIC", "ecommerce-raw-events")
     
     MINIO_ENDPOINT = os.getenv("MINIO_ENDPOINT", "localhost:9000")
     MINIO_ACCESS_KEY = os.getenv("MINIO_ACCESS_KEY", "admin")
