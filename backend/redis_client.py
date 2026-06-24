@@ -42,7 +42,7 @@ def get_recent_categories_key(user_id: str) -> str:
     return f"recent_categories:{user_id}"
 
 
-def add_recent_category(user_id: str, category: str) -> None:
+def increment_category_score(user_id: str, category: str, score: float) -> None:
     normalized_user_id = str(user_id).strip()
     normalized_category = str(category).strip()
     if not normalized_user_id or not normalized_category or r is None:
@@ -50,24 +50,26 @@ def add_recent_category(user_id: str, category: str) -> None:
 
     try:
         key = get_recent_categories_key(normalized_user_id)
-        r.sadd(key, normalized_category)
+        r.zincrby(key, score, normalized_category)
         r.expire(key, SESSION_CATEGORY_TTL_SECONDS)
         logger.info(
-            "Stored recent category in Redis: key=%s category=%s",
+            "Incremented category score in Redis: key=%s category=%s score=%s",
             key,
             normalized_category,
+            score,
         )
     except redis.RedisError as exc:
-        logger.warning("Redis unavailable while storing recent category: %s", exc)
+        logger.warning("Redis unavailable while incrementing category score: %s", exc)
 
 
-def get_recent_categories(user_id: str) -> set[str]:
+def get_category_scores(user_id: str) -> dict[str, float]:
     normalized_user_id = str(user_id).strip()
     if not normalized_user_id or r is None:
-        return set()
+        return {}
 
     try:
-        return set(r.smembers(get_recent_categories_key(normalized_user_id)))
+        raw_scores = r.zrevrange(get_recent_categories_key(normalized_user_id), 0, -1, withscores=True)
+        return {category: float(score) for category, score in raw_scores}
     except redis.RedisError as exc:
-        logger.warning("Redis unavailable while reading recent categories: %s", exc)
-        return set()
+        logger.warning("Redis unavailable while reading category scores: %s", exc)
+        return {}

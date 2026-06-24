@@ -26,7 +26,7 @@ from database import (
     get_recommendations_with_fallback,
 )
 from kafka_producer import produce_event
-from redis_client import add_recent_category, get_recent_categories
+from redis_client import increment_category_score, get_category_scores
 from schemas import (
     CartRecommendRequest,
     CategoryResponse,
@@ -69,7 +69,15 @@ app = FastAPI(lifespan=lifespan)
 # Backward-compatible name for tests/legacy monkeypatching.
 get_recommendations_from_db = get_recommendations_with_fallback
 
-SESSION_CATEGORY_EVENT_TYPES = {"product_click", "product_view"}
+SESSION_CATEGORY_EVENT_TYPES = {"product_click", "product_view", "add_to_cart", "purchase", "remove_from_cart"}
+EVENT_WEIGHTS = {
+    "view": 1.0,
+    "product_view": 1.0,
+    "product_click": 3.0,
+    "add_to_cart": 5.0,
+    "purchase": 10.0,
+    "remove_from_cart": -5.0,
+}
 SESSION_CATEGORY_FIELDS = (
     "category",
     "category_main",
@@ -172,7 +180,8 @@ def capture_recent_category(data: dict[str, Any]) -> None:
             )
             return
 
-        add_recent_category(normalized_user_id, category)
+        score = EVENT_WEIGHTS.get(event_type, 1.0)
+        increment_category_score(normalized_user_id, category, score)
     except Exception as exc:
         logger.warning("Failed to capture recent category: %s", exc)
 
@@ -188,40 +197,39 @@ def normalize_category_for_reranking(value: Any) -> str:
 
 def apply_category_reranking(
     items: list[dict[str, Any]],
-    recent_categories: set[str],
+    category_scores: dict[str, float],
 ) -> list[dict[str, Any]]:
-    if not recent_categories:
+    if not category_scores:
+        for item in items:
+            item["reranked_score"] = float(item.get("cluster_total_score") or 0.0)
+        items.sort(key=lambda x: x.get("reranked_score", 0.0), reverse=True)
         return items
 
-    normalized_recent_categories = {
-        normalized_category
-        for category in recent_categories
-        if (normalized_category := normalize_category_for_reranking(category))
+    normalized_scores = {
+        normalize_category_for_reranking(cat): score
+        for cat, score in category_scores.items()
     }
-    if not normalized_recent_categories:
-        return items
-
-    promoted_items: list[dict[str, Any]] = []
-    remaining_items: list[dict[str, Any]] = []
 
     for item in items:
-        item_categories = {
-            normalize_category_for_reranking(item.get("category")),
-            normalize_category_for_reranking(item.get("category_main")),
-        }
-        if item_categories.intersection(normalized_recent_categories):
-            promoted_items.append(item)
-        else:
-            remaining_items.append(item)
+        prod_cat = normalize_category_for_reranking(item.get("category"))
+        prod_cat_main = normalize_category_for_reranking(item.get("category_main"))
+        
+        score_cat = normalized_scores.get(prod_cat, 0.0)
+        score_cat_main = normalized_scores.get(prod_cat_main, 0.0)
+        matched_score = max(score_cat, score_cat_main)
+        
+        base_score = float(item.get("cluster_total_score") or 0.0)
+        item["reranked_score"] = base_score + matched_score
 
-    return promoted_items + remaining_items
+    items.sort(key=lambda x: x.get("reranked_score", 0.0), reverse=True)
+    return items
 
 
 def rerank_by_recent_categories(
     products: list[dict[str, Any]],
-    recent_categories: set[str],
+    category_scores: dict[str, float],
 ) -> list[dict[str, Any]]:
-    return apply_category_reranking(products, recent_categories)
+    return apply_category_reranking(products, category_scores)
 
 
 @app.post("/api/track")
@@ -245,14 +253,7 @@ def get_home_recommendations(
         # Gọi tên hàm lấy dữ liệu cá nhân hóa
         products = list(get_recommendations_by_strategy(user_id, strategy))
 
-    recent_categories = get_recent_categories(user_id)
-    normalized_recent_categories = {
-        normalized_category
-        for category in recent_categories
-        if (normalized_category := normalize_category_for_reranking(category))
-    }
-    for cat in normalized_recent_categories:
-        products.extend(get_products_from_db(selected_category_main=cat, limit=3)[:3])
+    category_scores = get_category_scores(user_id)
 
     unique_products_by_id: dict[str, dict[str, Any]] = {}
     for product in products:
@@ -262,7 +263,7 @@ def get_home_recommendations(
         unique_products_by_id.setdefault(str(product_id), product)
 
     unique_products = list(unique_products_by_id.values())
-    products = apply_category_reranking(unique_products, recent_categories)
+    products = apply_category_reranking(unique_products, category_scores)
     return products
 
 
