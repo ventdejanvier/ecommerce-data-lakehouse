@@ -4,6 +4,9 @@ import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { Terminal, Minimize2, Maximize2, X, Activity } from 'lucide-react';
 import { Button } from '@/components/ui/button';
+import { Switch } from '@/components/ui/switch';
+import { useToast } from '@/hooks/use-toast';
+import { useMLStore } from '@/lib/ml-store';
 import { subscribeTelemetry, EventType, EventPayload } from '@/lib/tracking';
 
 interface TelemetryLog {
@@ -32,6 +35,45 @@ export function TelemetryWidget() {
   const [isMinimized, setIsMinimized] = useState(false);
   const [logs, setLogs] = useState<TelemetryLog[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
+
+  const { toast } = useToast();
+  const { isShowtimeActive, setShowtimeActive } = useMLStore();
+
+  const handleShowtimeToggle = async (checked: boolean) => {
+    try {
+      const response = await fetch(`http://localhost:8000/api/admin/showtime?is_active=${checked}`, {
+        method: 'POST',
+      });
+      if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
+      }
+      const data = await response.json();
+      if (data.status === 'success') {
+        setShowtimeActive(checked);
+        toast({
+          title: checked
+            ? '🚀 Showtime Mode Activated!'
+            : '⏸️ Showtime Mode Deactivated',
+          description: checked
+            ? 'Airflow transform_gold_dag is now unpaused (3m demo cycles active).'
+            : 'Airflow transform_gold_dag has been paused.',
+        });
+      } else {
+        toast({
+          variant: 'destructive',
+          title: 'Error updating Showtime Mode',
+          description: data.message || 'Could not contact backend admin endpoint.',
+        });
+      }
+    } catch (error) {
+      console.error('Error toggling showtime:', error);
+      toast({
+        variant: 'destructive',
+        title: 'Network Error',
+        description: 'Failed to contact the backend server.',
+      });
+    }
+  };
 
   useEffect(() => {
     const unsubscribe = subscribeTelemetry((event) => {
@@ -194,18 +236,30 @@ export function TelemetryWidget() {
             </div>
 
             {/* Footer */}
-            <div className="flex items-center justify-between border-t border-background/10 bg-foreground/50 px-3 py-1.5">
-              <span className="text-[10px] text-background/40">
-                {logs.length} events captured
-              </span>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-5 px-2 text-[10px] text-background/40 hover:text-background hover:bg-background/10"
-                onClick={() => setLogs([])}
-              >
-                Clear
-              </Button>
+            <div className="flex flex-col gap-2 border-t border-background/10 bg-foreground/50 px-3 py-2">
+              <div className="flex items-center justify-between">
+                <span className="text-xs text-background font-medium">
+                  Showtime Mode (3m Batch)
+                </span>
+                <Switch
+                  checked={isShowtimeActive}
+                  onCheckedChange={handleShowtimeToggle}
+                  className="data-[state=checked]:bg-primary"
+                />
+              </div>
+              <div className="flex items-center justify-between border-t border-background/5 pt-1.5">
+                <span className="text-[10px] text-background/40">
+                  {logs.length} events captured
+                </span>
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="h-5 px-2 text-[10px] text-background/40 hover:text-background hover:bg-background/10"
+                  onClick={() => setLogs([])}
+                >
+                  Clear
+                </Button>
+              </div>
             </div>
           </motion.div>
         )}

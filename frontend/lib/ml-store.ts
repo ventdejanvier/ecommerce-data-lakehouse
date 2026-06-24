@@ -15,10 +15,12 @@ export interface AIRecommendation {
 interface MLState {
   isAiEnabled: boolean;
   mlStrategy: string;
+  isShowtimeActive: boolean;
   aiRecommendations: AIRecommendation[];
   isLoading: boolean;
   toggleAi: () => void;
   setMlStrategy: (strategy: string) => void;
+  setShowtimeActive: (val: boolean) => void;
   setRecommendations: (data: AIRecommendation[]) => void;
   setLoading: (status: boolean) => void;
   // Backward-compatible aliases for existing rendering components.
@@ -30,6 +32,7 @@ interface MLState {
 export const useMLStore = create<MLState>((set, get) => ({
   isAiEnabled: false,
   mlStrategy: 'als',
+  isShowtimeActive: false,
   aiRecommendations: [],
   isLoading: false,
   isMLEnabled: false,
@@ -52,7 +55,7 @@ export const useMLStore = create<MLState>((set, get) => ({
 
   setMlStrategy: (strategy: string) => {
     const previousStrategy = get().mlStrategy;
-    
+
     if (strategy !== previousStrategy) {
       set({ mlStrategy: strategy });
 
@@ -70,6 +73,10 @@ export const useMLStore = create<MLState>((set, get) => ({
         void fetchRecommendations(null, true);
       }
     }
+  },
+
+  setShowtimeActive: (val: boolean) => {
+    set({ isShowtimeActive: val });
   },
 
   setRecommendations: (data: AIRecommendation[]) => {

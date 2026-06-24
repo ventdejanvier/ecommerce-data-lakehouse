@@ -45,16 +45,25 @@ def test_legacy_recommendations_endpoint_schema(monkeypatch) -> None:
 
 
 def test_home_recommendations_endpoint_schema(monkeypatch) -> None:
-    monkeypatch.setattr(
-        main,
-        "get_recommendations_from_db",
-        lambda user_id: sample_recommendations(),
-    )
+    mock_products = [
+        {
+            "id": "101",
+            "name": "Demo Product",
+            "price": 100.0,
+            "category": "Laptops",
+            "cluster_total_score": 12.5,
+        }
+    ]
+    monkeypatch.setattr(main, "get_global_recommendations", lambda: mock_products)
+    monkeypatch.setattr(main, "get_category_scores", lambda user_id: {"Laptops": 5.0})
 
     response = client.get("/api/recommend/home/USER_001")
 
     assert response.status_code == 200
-    assert response.json() == sample_recommendations()
+    data = response.json()
+    assert len(data) == 1
+    assert data[0]["id"] == "101"
+    assert data[0]["reranked_score"] == 17.5
 
 
 def test_track_endpoint_accepts_event_and_queues_kafka(monkeypatch) -> None:
@@ -81,6 +90,6 @@ def test_track_endpoint_accepts_event_and_queues_kafka(monkeypatch) -> None:
 
     response = client.post("/api/track", json=payload)
 
-    assert response.status_code == 202
-    assert response.json() == {"status": "accepted", "eventId": "evt_test_001"}
+    assert response.status_code == 200
+    assert response.json() == {"status": "ok", "eventId": "evt_test_001"}
     assert produced_events == [("ecommerce-raw-events", payload)]

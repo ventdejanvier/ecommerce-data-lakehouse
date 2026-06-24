@@ -38,10 +38,9 @@ export function MLToggle() {
       className="flex items-center gap-3 px-4 py-2 rounded-full bg-muted/50 border border-border"
     >
       <div className="flex items-center gap-2">
-        <Sparkles 
-          className={`h-4 w-4 transition-colors duration-300 ${
-            isAiEnabled ? 'text-amber-500' : 'text-muted-foreground'
-          }`} 
+        <Sparkles
+          className={`h-4 w-4 transition-colors duration-300 ${isAiEnabled ? 'text-amber-500' : 'text-muted-foreground'
+            }`}
         />
         <span className="text-sm font-medium text-foreground">
           ML Recommendations

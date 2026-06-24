@@ -135,6 +135,33 @@ def get_global_recommendations():
 def health_check() -> dict[str, str]:
     return {"status": "ok"}
 
+@app.post("/api/admin/showtime")
+def set_showtime_mode(is_active: bool = Query(...)):
+    import urllib.request
+    import json
+    import base64
+    
+    url = "http://airflow-webserver:8080/api/v1/dags/transform_gold_dag"
+    payload = json.dumps({"is_paused": not is_active}).encode("utf-8")
+    
+    req = urllib.request.Request(url, data=payload, method="PATCH")
+    req.add_header("Content-Type", "application/json")
+    
+    # Basic Auth: admin:admin
+    auth_str = "admin:admin"
+    auth_b64 = base64.b64encode(auth_str.encode("utf-8")).decode("utf-8")
+    req.add_header("Authorization", f"Basic {auth_b64}")
+    
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            if response.status in (200, 201, 202, 204):
+                return {"status": "success", "is_active": is_active}
+            else:
+                return {"status": "error", "message": f"Airflow returned status {response.status}"}
+    except Exception as e:
+        logger.warning("Failed to contact Airflow API: %s", e)
+        return {"status": "error", "message": f"Could not connect to Airflow: {str(e)}"}
+
 
 def send_to_kafka_background(data: dict[str, Any]) -> None:
     try:
@@ -325,5 +352,6 @@ def get_products_by_category(selected_category: str) -> list[dict[str, Any]]:
     category_name = category_by_slug.get(selected_category, selected_category)
     return get_products_from_db(category_name)
  
+@app.get("/api/recommendations/{user_id}", response_model=list[RecommendationResponse])
 def get_recommendations(user_id: str) -> list[dict[str, Any]]:
     return get_recommendations_from_db(user_id)
