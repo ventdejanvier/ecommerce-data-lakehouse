@@ -194,8 +194,11 @@ services:
   metabase:
     image: metabase/metabase:latest
     container_name: ecommerce_metabase
+    volumes:
+      - ./persistence/metabase_data:/metabase.db 
     ports:
       - "3001:3000"
     environment:
-      JAVA_OPTS: -Xmx512m
+      - MB_DB_FILE=/metabase.db/metabase.db
+      - JAVA_OPTS=-Xmx512m
     restart: always
