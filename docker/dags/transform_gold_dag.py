@@ -15,17 +15,10 @@ with DAG(
     schedule_interval="*/15 * * * *",
     catchup=False,
     max_active_runs=1,
-    tags=['transformation', 'gold', 'ml', 'retraining']
+    tags=['transformation', 'gold']
 ) as dag:
 
     run_silver_to_gold = BashOperator(
         task_id='run_silver_to_gold',
         bash_command='docker exec jupyter-notebook spark-submit --packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 /home/jovyan/scripts/transform_silver_to_gold.py',
     )
-
-    run_ml_retraining = BashOperator(
-        task_id='run_ml_retraining',
-        bash_command='docker exec jupyter-notebook spark-submit --packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 /home/jovyan/scripts/export_als_recommendations.py',
-    )
-
-    run_silver_to_gold >> run_ml_retraining
