@@ -10,7 +10,8 @@ with DAG('ingest_bronze_dag', default_args=default_args, schedule_interval='@dai
     # 1. Chạy script nạp dữ liệu từ Raw lên Bronze, truyền tham số ngày chạy (execution_date) để làm partition
     task_ingest = BashOperator(
         task_id='run_ingest_raw_to_bronze',
-        bash_command='docker exec -u root jupyter-notebook spark-submit --packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 /home/jovyan/scripts/ingest_raw_to_bronze.py {{ ds }}'
+        bash_command='docker exec -u root jupyter-notebook spark-submit --packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 /home/jovyan/scripts/ingest_raw_to_bronze.py {{ ds }}',
+        pool='spark_heavy'
     )
 
     # tự động gọi DAG Silver

@@ -29,30 +29,35 @@ dag = DAG(
 run_kmeans_task = BashOperator(
     task_id='run_kmeans_clustering',
     bash_command=f'docker exec -u root jupyter-notebook spark-submit --packages "{SPARK_PACKAGES}" /home/jovyan/scripts/analyze_user_clusters.py',
+    pool='spark_heavy',
     dag=dag,
 )
 
 generate_recommendations_task = BashOperator(
     task_id='generate_cluster_recommendations',
     bash_command=f'docker exec -u root jupyter-notebook spark-submit --packages "{SPARK_PACKAGES}" /home/jovyan/scripts/generate_cluster_recommendations.py',
+    pool='spark_heavy',
     dag=dag,
 )
 
 export_als_task = BashOperator(
     task_id='export_als_recommendations',
     bash_command=f'docker exec -u root jupyter-notebook spark-submit --packages "{SPARK_PACKAGES}" /home/jovyan/scripts/export_als_recommendations.py',
+    pool='spark_heavy',
     dag=dag,
 )
 
 export_content_based_task = BashOperator(
     task_id='export_content_based',
     bash_command=f'docker exec -u root jupyter-notebook spark-submit --packages "{SPARK_PACKAGES}" /home/jovyan/scripts/export_content_based.py',
+    pool='spark_heavy',
     dag=dag,
 )
 
 export_item_based_task = BashOperator(
     task_id='export_item_based',
     bash_command=f'docker exec -u root jupyter-notebook spark-submit --packages "{SPARK_PACKAGES}" /home/jovyan/scripts/export_item_based.py',
+    pool='spark_heavy',
     dag=dag,
 )
 

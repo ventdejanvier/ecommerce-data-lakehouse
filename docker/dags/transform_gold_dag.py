@@ -1,7 +1,6 @@
 from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.bash import BashOperator
-from airflow.operators.trigger_dagrun import TriggerDagRunOperator
 
 default_args = {
     'owner': 'airflow',
@@ -22,11 +21,5 @@ with DAG(
     run_silver_to_gold = BashOperator(
         task_id='run_silver_to_gold',
         bash_command='docker exec jupyter-notebook spark-submit --packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 /home/jovyan/scripts/transform_silver_to_gold.py',
+        pool='spark_heavy',
     )
-
-    trigger_ml_analytics = TriggerDagRunOperator(
-        task_id='trigger_ml_analytics',
-        trigger_dag_id='user_analytics_dag',
-    )
-
-    run_silver_to_gold >> trigger_ml_analytics

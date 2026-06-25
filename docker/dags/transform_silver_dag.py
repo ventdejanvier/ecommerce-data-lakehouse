@@ -30,6 +30,7 @@ dag = DAG(
 transform_task = BashOperator(
     task_id='run_transform_bronze_to_silver',
     bash_command='docker exec -u root jupyter-notebook spark-submit --packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 /home/jovyan/scripts/transform_bronze_to_silver.py',
+    pool='spark_heavy',
     dag=dag,
 )
 

@@ -102,7 +102,8 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     command: >
       bash -c "airflow db init &&
-      airflow users create --username admin --password admin --firstname Admin --lastname Admin --role Admin --email admin@example.com || true &&
+      airflow pools set spark_heavy 1 \"Global serialization for Airflow-managed Spark batch tasks\" &&
+      (airflow users create --username admin --password admin --firstname Admin --lastname Admin --role Admin --email admin@example.com || true) &&
       (airflow scheduler & airflow webserver)"
 
   # --- HIVE METASTORE (Catalog cho Lakehouse) ---
