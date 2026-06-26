@@ -4,6 +4,12 @@ from pyspark.sql.window import Window
 sys.path.append('/home/jovyan/scripts')
 from common_config import get_spark_session
 
+def live_col(df, candidates, alias_name, data_type="string"):
+    for source_col in candidates:
+        if source_col in df.columns:
+            return F.col(source_col).alias(alias_name)
+    return F.lit(None).cast(data_type).alias(alias_name)
+
 def transform_gold():
     # Khởi tạo Spark Session cho tầng Gold
     spark = get_spark_session("Gold_Layer")
@@ -86,6 +92,22 @@ def transform_gold():
     # Thêm bảng fact_events để Metabase query báo cáo
     fact_events = df_silver.select("event_time", "event_type", "product_id", "user_id", "price", "user_session")
 
+    fact_live_events = None
+    try:
+        print("Loading live tracking events from Silver...")
+        df_live = spark.read.format("delta").load("s3a://silver/tracking_events")
+        fact_live_events = df_live.select(
+            live_col(df_live, ["eventId", "event_id"], "event_id"),
+            live_col(df_live, ["timestamp", "event_time"], "event_time"),
+            live_col(df_live, ["eventType", "event_type"], "event_type"),
+            live_col(df_live, ["productId", "product_id"], "product_id"),
+            live_col(df_live, ["userId", "user_id"], "user_id"),
+            live_col(df_live, ["price"], "price", "double"),
+            live_col(df_live, ["userSession", "user_session"], "user_session"),
+        )
+    except Exception as e:
+        print(f"Skipping live tracking Gold table because live Silver is unavailable: {e}")
+
     output_tables = {
         "gold_db.dim_products": dim_products,
         "gold_db.fact_events": fact_events,
@@ -94,6 +116,9 @@ def transform_gold():
         "gold_db.top_trending": top_products,
         "gold_db.user_rfm": rfm
     }
+
+    if fact_live_events is not None:
+        output_tables["gold_db.fact_live_events"] = fact_live_events
 
     for table_name, df in output_tables.items():
         print(f"Persisting table: {table_name}")
