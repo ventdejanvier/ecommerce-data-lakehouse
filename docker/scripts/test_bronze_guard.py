@@ -1,5 +1,7 @@
 #!/usr/bin/env python
 import argparse
+import os
+import re
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -10,6 +12,10 @@ from pyspark.sql.types import DoubleType, StringType, StructField, StructType
 
 
 TARGET_BASE = "s3a://phase76-test/bronze/electronics_events_guard"
+RUN_TARGET_PATTERN = re.compile(
+    r"^s3a://phase76-test/bronze/electronics_events_guard/"
+    r"run_[0-9]{8}T[0-9]{6}[0-9]{6}Z_[0-9a-f]{12}$"
+)
 CASE_NAMES = (
     "VALID_SOURCE",
     "EMPTY_SOURCE",
@@ -66,13 +72,20 @@ EXPECTED_BRONZE_DTYPES = {
 
 
 def build_spark_session() -> SparkSession:
+    minio_access_key = os.getenv("MINIO_ACCESS_KEY")
+    minio_secret_key = os.getenv("MINIO_SECRET_KEY")
+    if not minio_access_key or not minio_secret_key:
+        raise RuntimeError(
+            "MINIO_ACCESS_KEY and MINIO_SECRET_KEY environment variables are required"
+        )
+
     return (
         SparkSession.builder.appName("Phase76BronzeGuardValidation")
         .config("spark.sql.extensions", "io.delta.sql.DeltaSparkSessionExtension")
         .config("spark.sql.catalog.spark_catalog", "org.apache.spark.sql.delta.catalog.DeltaCatalog")
         .config("spark.hadoop.fs.s3a.endpoint", "http://minio:9000")
-        .config("spark.hadoop.fs.s3a.access.key", "admin")
-        .config("spark.hadoop.fs.s3a.secret.key", "password")
+        .config("spark.hadoop.fs.s3a.access.key", minio_access_key)
+        .config("spark.hadoop.fs.s3a.secret.key", minio_secret_key)
         .config("spark.hadoop.fs.s3a.path.style.access", "true")
         .config("spark.hadoop.fs.s3a.impl", "org.apache.hadoop.fs.s3a.S3AFileSystem")
         .getOrCreate()
@@ -284,7 +297,7 @@ def run_case(case_name: str, case_func, spark: SparkSession, run_target_path: st
 
 
 def verify_target(spark: SparkSession, target_path: str) -> None:
-    require_target_under_base(target_path)
+    require_exact_run_target(target_path)
     print(f"READ_ONLY_VERIFY_TARGET={target_path}")
     for case_name in CASE_NAMES:
         path = case_path(target_path, case_name)
@@ -297,22 +310,27 @@ def verify_target(spark: SparkSession, target_path: str) -> None:
 
 
 def cleanup_target(spark: SparkSession, target_path: str) -> None:
-    require_target_under_base(target_path)
+    require_exact_run_target(target_path)
     hadoop_conf = spark.sparkContext._jsc.hadoopConfiguration()
     uri = spark.sparkContext._jvm.java.net.URI(target_path)
     fs = spark.sparkContext._jvm.org.apache.hadoop.fs.FileSystem.get(uri, hadoop_conf)
     path = spark.sparkContext._jvm.org.apache.hadoop.fs.Path(target_path)
     deleted = fs.delete(path, True)
+    exists_after_delete = fs.exists(path)
     print(f"CLEANUP_TARGET={target_path}")
     print(f"CLEANUP_DELETED={deleted}")
+    print(f"CLEANUP_EXISTS_AFTER_DELETE={exists_after_delete}")
+    if not deleted:
+        raise RuntimeError(f"Cleanup failed because fs.delete returned False: {target_path}")
+    if exists_after_delete:
+        raise RuntimeError(f"Cleanup failed because target still exists: {target_path}")
 
 
-def require_target_under_base(target_path: str) -> None:
-    required_prefix = TARGET_BASE + "/"
-    if not target_path.startswith(required_prefix):
+def require_exact_run_target(target_path: str) -> None:
+    if not RUN_TARGET_PATTERN.fullmatch(target_path):
         raise RuntimeError(
-            f"Refusing target outside test base. target={target_path!r}, "
-            f"required_prefix={required_prefix!r}"
+            "Refusing target that is not an exact Phase 76 guard run root. "
+            f"target={target_path!r}, expected_pattern={RUN_TARGET_PATTERN.pattern!r}"
         )
 
 
@@ -320,11 +338,12 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Phase 76-C1 Bronze guard validation proof-of-concept"
     )
-    parser.add_argument(
+    mode_group = parser.add_mutually_exclusive_group()
+    mode_group.add_argument(
         "--verify-target",
         help="Read-only verification of a previously printed run target path.",
     )
-    parser.add_argument(
+    mode_group.add_argument(
         "--cleanup-target",
         help="Explicitly delete a previously printed run target path under the test base.",
     )
@@ -338,6 +357,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+
+    if args.confirm_cleanup and not args.cleanup_target:
+        print("FAIL CLEANUP: --confirm-cleanup is only valid with --cleanup-target")
+        return 2
 
     if args.cleanup_target and not args.confirm_cleanup:
         print("FAIL CLEANUP: --cleanup-target requires --confirm-cleanup")
