@@ -6,6 +6,8 @@ from typing import Any
 from sqlalchemy import bindparam, create_engine, text
 from sqlalchemy.engine import Connection
 
+from recommendation_scoring import SCORING_CONFIG, blend_model_candidates
+
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
     "postgresql://user:password@localhost:5434/data_lakehouse",
@@ -496,12 +498,26 @@ def _fetch_user_level_recommendations(
     user_id: str,
     limit: int,
 ) -> list[dict[str, Any]]:
-    merged: dict[int, dict[str, Any]] = {}
-    _merge_recommendations(merged, _fetch_user_recommendations_from_als(connection, user_id, limit))
-    _merge_recommendations(
-        merged,
-        _fetch_user_recommendations_from_content_based(connection, user_id, limit),
+    als_recommendations = _fetch_user_recommendations_from_als(connection, user_id, limit)
+    content_recommendations = _fetch_user_recommendations_from_content_based(
+        connection,
+        user_id,
+        limit,
     )
+
+    if SCORING_CONFIG.enabled:
+        blended = blend_model_candidates(
+            als_recommendations,
+            content_recommendations,
+            als_weight=SCORING_CONFIG.als_weight,
+            content_weight=SCORING_CONFIG.content_weight,
+            limit=limit,
+        )
+        return [_normalize_recommendation(row) for row in blended]
+
+    merged: dict[int, dict[str, Any]] = {}
+    _merge_recommendations(merged, als_recommendations)
+    _merge_recommendations(merged, content_recommendations)
     recommendations = sorted(
         merged.values(),
         key=lambda row: row["cluster_total_score"],

@@ -26,6 +26,13 @@ from database import (
     get_recommendations_with_fallback,
 )
 from kafka_producer import produce_event
+from recommendation_scoring import (
+    SCORING_CONFIG,
+    normalize_category,
+    purchase_completed_category_updates,
+    rerank_candidates,
+    resolve_recent_event_weight,
+)
 from redis_client import increment_category_score, get_category_scores
 from schemas import (
     CartRecommendRequest,
@@ -69,18 +76,9 @@ app = FastAPI(lifespan=lifespan)
 # Backward-compatible name for tests/legacy monkeypatching.
 get_recommendations_from_db = get_recommendations_with_fallback
 
-SESSION_CATEGORY_EVENT_TYPES = {"product_click", "product_view", "add_to_cart", "purchase", "remove_from_cart"}
-EVENT_WEIGHTS = {
-    "view": 1.0,
-    "product_view": 1.0,
-    "product_click": 3.0,
-    "add_to_cart": 5.0,
-    "purchase": 10.0,
-    "remove_from_cart": -5.0,
-}
 SESSION_CATEGORY_FIELDS = (
-    "category",
     "category_main",
+    "category",
     "productCategory",
     "product_category",
     "categoryName",
@@ -187,10 +185,19 @@ def extract_session_category(data: dict[str, Any]) -> str | None:
 def capture_recent_category(data: dict[str, Any]) -> None:
     try:
         event_type = str(data.get("eventType", "")).strip()
+        purchase_updates = purchase_completed_category_updates(data)
+        if purchase_updates:
+            category_updates = purchase_updates
+        else:
+            score = resolve_recent_event_weight(event_type, data.get("action"))
+            category = extract_session_category(data)
+            category_updates = [(category, score)] if category and score is not None else []
+
+        if not category_updates:
+            return
+
         user_id = data.get("userId")
         normalized_user_id = str(user_id).strip() if user_id is not None else ""
-        if event_type not in SESSION_CATEGORY_EVENT_TYPES:
-            return
         if not normalized_user_id:
             logger.info(
                 "Skipping recent category capture: missing userId eventId=%s",
@@ -198,58 +205,29 @@ def capture_recent_category(data: dict[str, Any]) -> None:
             )
             return
 
-        category = extract_session_category(data)
-        if not category:
-            logger.info(
-                "Skipping recent category capture: missing category eventId=%s userId=%s",
-                data.get("eventId"),
-                normalized_user_id,
-            )
-            return
-
-        score = EVENT_WEIGHTS.get(event_type, 1.0)
-        increment_category_score(normalized_user_id, category, score)
+        for category, score in category_updates:
+            try:
+                increment_category_score(normalized_user_id, category, score)
+            except Exception as exc:
+                logger.warning(
+                    "Failed to increment recent category: userId=%s category=%s error=%s",
+                    normalized_user_id,
+                    category,
+                    exc,
+                )
     except Exception as exc:
         logger.warning("Failed to capture recent category: %s", exc)
 
 
 def normalize_category_for_reranking(value: Any) -> str:
-    if value is None:
-        return ""
-
-    normalized = str(value).strip().lower()
-    normalized = normalized.replace("_", " ").replace("-", " ")
-    return " ".join(normalized.split())
+    return normalize_category(value)
 
 
 def apply_category_reranking(
     items: list[dict[str, Any]],
     category_scores: dict[str, float],
 ) -> list[dict[str, Any]]:
-    if not category_scores:
-        for item in items:
-            item["reranked_score"] = float(item.get("cluster_total_score") or 0.0)
-        items.sort(key=lambda x: x.get("reranked_score", 0.0), reverse=True)
-        return items
-
-    normalized_scores = {
-        normalize_category_for_reranking(cat): score
-        for cat, score in category_scores.items()
-    }
-
-    for item in items:
-        prod_cat = normalize_category_for_reranking(item.get("category"))
-        prod_cat_main = normalize_category_for_reranking(item.get("category_main"))
-        
-        score_cat = normalized_scores.get(prod_cat, 0.0)
-        score_cat_main = normalized_scores.get(prod_cat_main, 0.0)
-        matched_score = max(score_cat, score_cat_main)
-        
-        base_score = float(item.get("cluster_total_score") or 0.0)
-        item["reranked_score"] = base_score + matched_score
-
-    items.sort(key=lambda x: x.get("reranked_score", 0.0), reverse=True)
-    return items
+    return rerank_candidates(items, category_scores, SCORING_CONFIG)
 
 
 def rerank_by_recent_categories(

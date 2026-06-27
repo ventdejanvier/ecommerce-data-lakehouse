@@ -199,11 +199,12 @@ export function CartSheet() {
     });
   };
 
-  const handleRemoveItem = (productId: string, productName: string) => {
-    removeItem(productId);
+  const handleRemoveItem = (product: Product) => {
+    removeItem(product.id);
     logEvent('CART_UPDATE', {
-      productId,
-      productName,
+      productId: product.id,
+      productName: product.name,
+      productCategory: product.category_main || product.category,
       action: 'remove',
       timestamp: new Date().toISOString(),
     });
@@ -234,6 +235,7 @@ export function CartSheet() {
       items: items.map((item) => ({
         productId: item.product.id,
         productName: item.product.name,
+        productCategory: item.product.category_main || item.product.category,
         quantity: item.quantity,
         price: item.product.price,
       })),
@@ -253,6 +255,7 @@ export function CartSheet() {
       items: items.map((item) => ({
         productId: item.product.id,
         productName: item.product.name,
+        productCategory: item.product.category_main || item.product.category,
         quantity: item.quantity,
         price: item.product.price,
         subtotal: item.product.price * item.quantity,
@@ -369,7 +372,7 @@ export function CartSheet() {
                           variant="ghost"
                           size="icon"
                           className="h-6 w-6 text-muted-foreground hover:text-destructive hover:bg-destructive/10"
-                          onClick={() => handleRemoveItem(item.product.id, item.product.name)}
+                          onClick={() => handleRemoveItem(item.product)}
                         >
                           <Trash2 className="h-3.5 w-3.5" />
                         </Button>
