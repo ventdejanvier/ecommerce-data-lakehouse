@@ -41,8 +41,8 @@ def test_purchase_completed_increments_two_distinct_categories_once(monkeypatch)
         },
     )
     assert captured == [
-        ("USER_001", "Electronics", 10.0),
-        ("USER_001", "Home Appliances", 10.0),
+        ("USER_001", "electronics", 10.0),
+        ("USER_001", "home appliances", 10.0),
     ]
 
 
@@ -58,7 +58,7 @@ def test_purchase_completed_deduplicates_same_category(monkeypatch) -> None:
             ],
         },
     )
-    assert captured == [("USER_001", "Home Appliances", 10.0)]
+    assert captured == [("USER_001", "home appliances", 10.0)]
 
 
 def test_purchase_completed_ignores_malformed_items(monkeypatch) -> None:
@@ -70,7 +70,7 @@ def test_purchase_completed_ignores_malformed_items(monkeypatch) -> None:
             "items": [None, "bad", {}, {"category": 123}, {"categoryName": "Valid"}],
         },
     )
-    assert captured == [("USER_001", "Valid", 10.0)]
+    assert captured == [("USER_001", "valid", 10.0)]
 
 
 def test_purchase_completed_without_categories_does_not_increment(monkeypatch) -> None:
@@ -94,7 +94,7 @@ def test_legacy_purchase_with_top_level_category_still_increments(monkeypatch) -
             "category": "Electronics",
         },
     )
-    assert captured == [("USER_001", "Electronics", 10.0)]
+    assert captured == [("USER_001", "electronics", 10.0)]
 
 
 def test_cart_remove_prefers_category_main(monkeypatch) -> None:
@@ -108,7 +108,7 @@ def test_cart_remove_prefers_category_main(monkeypatch) -> None:
             "category": "Fallback",
         },
     )
-    assert captured == [("USER_001", "Electronics", -5.0)]
+    assert captured == [("USER_001", "electronics", -5.0)]
 
 
 def test_track_handler_uses_mocked_redis_and_kafka(monkeypatch) -> None:
@@ -138,8 +138,8 @@ def test_track_handler_uses_mocked_redis_and_kafka(monkeypatch) -> None:
 
     assert response == {"status": "ok", "eventId": "purchase_001"}
     assert redis_updates == [
-        ("USER_001", "Electronics", 10.0),
-        ("USER_001", "Books", 10.0),
+        ("USER_001", "electronics", 10.0),
+        ("USER_001", "books", 10.0),
     ]
     assert produced_events == [("ecommerce-raw-events", payload)]
 

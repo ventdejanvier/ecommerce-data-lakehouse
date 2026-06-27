@@ -3,6 +3,8 @@ from __future__ import annotations
 import logging
 import os
 
+from recommendation_scoring import finite_float, normalize_category
+
 try:
     import redis
 except ImportError:  # pragma: no cover - dependency is installed in the backend runtime.
@@ -39,31 +41,35 @@ r = (
 
 
 def get_recent_categories_key(user_id: str) -> str:
-    return f"recent_categories:{user_id}"
+    normalized_user_id = str(user_id).strip() if user_id is not None else ""
+    if not normalized_user_id:
+        raise ValueError("user_id must contain a non-whitespace value")
+    return f"recent_categories:{normalized_user_id}"
 
 
 def increment_category_score(user_id: str, category: str, score: float) -> None:
-    normalized_user_id = str(user_id).strip()
-    normalized_category = str(category).strip()
-    if not normalized_user_id or not normalized_category or r is None:
+    normalized_user_id = str(user_id).strip() if user_id is not None else ""
+    canonical_category = normalize_category(category)
+    finite_score = finite_float(score)
+    if not normalized_user_id or not canonical_category or finite_score is None or r is None:
         return
 
     try:
         key = get_recent_categories_key(normalized_user_id)
-        r.zincrby(key, score, normalized_category)
+        r.zincrby(key, finite_score, canonical_category)
         r.expire(key, SESSION_CATEGORY_TTL_SECONDS)
         logger.info(
             "Incremented category score in Redis: key=%s category=%s score=%s",
             key,
-            normalized_category,
-            score,
+            canonical_category,
+            finite_score,
         )
     except redis.RedisError as exc:
         logger.warning("Redis unavailable while incrementing category score: %s", exc)
 
 
 def get_category_scores(user_id: str) -> dict[str, float]:
-    normalized_user_id = str(user_id).strip()
+    normalized_user_id = str(user_id).strip() if user_id is not None else ""
     if not normalized_user_id or r is None:
         return {}
 

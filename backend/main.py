@@ -172,12 +172,9 @@ def send_to_kafka_background(data: dict[str, Any]) -> None:
 def extract_session_category(data: dict[str, Any]) -> str | None:
     for field in SESSION_CATEGORY_FIELDS:
         category = data.get(field)
-        if category is None:
-            continue
-
-        normalized_category = str(category).strip()
-        if normalized_category:
-            return normalized_category
+        canonical_category = normalize_category(category)
+        if canonical_category:
+            return canonical_category
 
     return None
 
@@ -206,13 +203,16 @@ def capture_recent_category(data: dict[str, Any]) -> None:
             return
 
         for category, score in category_updates:
+            canonical_category = normalize_category(category)
+            if not canonical_category:
+                continue
             try:
-                increment_category_score(normalized_user_id, category, score)
+                increment_category_score(normalized_user_id, canonical_category, score)
             except Exception as exc:
                 logger.warning(
                     "Failed to increment recent category: userId=%s category=%s error=%s",
                     normalized_user_id,
-                    category,
+                    canonical_category,
                     exc,
                 )
     except Exception as exc:

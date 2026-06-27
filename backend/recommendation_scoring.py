@@ -217,23 +217,41 @@ def blend_model_candidates(
 
 
 def normalize_category(value: Any) -> str:
-    if value is None:
+    """Return the canonical Redis category member for a string category.
+
+    Non-string values are malformed under the event contract and normalize to
+    an empty value so callers can safely ignore them.
+    """
+    if not isinstance(value, str):
         return ""
-    normalized = str(value).strip().lower()
+    normalized = value.strip().lower()
     normalized = normalized.replace("_", " ").replace("-", " ")
     return " ".join(normalized.split())
+
+
+def aggregate_category_scores(
+    category_scores: Mapping[Any, Any],
+) -> dict[str, float]:
+    """Aggregate finite alias scores into deterministic canonical totals."""
+    scores_by_category: dict[str, list[float]] = {}
+    for category, score in category_scores.items():
+        canonical_category = normalize_category(category)
+        finite_score = finite_float(score)
+        if not canonical_category or finite_score is None:
+            continue
+        scores_by_category.setdefault(canonical_category, []).append(finite_score)
+
+    return {
+        category: math.fsum(sorted(scores))
+        for category, scores in sorted(scores_by_category.items())
+    }
 
 
 def _matched_recent_score(
     item: Mapping[str, Any],
     category_scores: Mapping[str, Any],
 ) -> float:
-    normalized_scores = {
-        normalize_category(category): parsed_score
-        for category, score in category_scores.items()
-        if (parsed_score := finite_float(score)) is not None
-        and normalize_category(category)
-    }
+    normalized_scores = aggregate_category_scores(category_scores)
     for field_name in ("category", "category_main"):
         category = normalize_category(item.get(field_name))
         if category in normalized_scores:
@@ -246,16 +264,13 @@ def _legacy_rerank_candidates(
     category_scores: Mapping[str, Any],
 ) -> list[dict[str, Any]]:
     """Preserve the pre-V2 production behavior exactly."""
-    if not category_scores:
+    normalized_scores = aggregate_category_scores(category_scores)
+    if not normalized_scores:
         for item in items:
             item["reranked_score"] = float(item.get("cluster_total_score") or 0.0)
         items.sort(key=lambda item: item.get("reranked_score", 0.0), reverse=True)
         return items
 
-    normalized_scores = {
-        normalize_category(category): score
-        for category, score in category_scores.items()
-    }
     for item in items:
         product_category = normalize_category(item.get("category"))
         product_category_main = normalize_category(item.get("category_main"))
@@ -324,9 +339,8 @@ def purchase_completed_category_updates(
 ) -> list[tuple[str, float]]:
     """Return one purchase increment per distinct valid item category.
 
-    Categories are deduplicated by their normalized representation while the
-    first nonempty source spelling is retained for the Redis member. Quantity
-    is intentionally ignored.
+    Categories are returned as canonical Redis members. Quantity is
+    intentionally ignored.
     """
     event_type = str(event.get("eventType") or "").strip().lower()
     if event_type != "purchase_completed":
@@ -336,7 +350,7 @@ def purchase_completed_category_updates(
     if not isinstance(items, list):
         return []
 
-    categories_by_normalized_name: dict[str, str] = {}
+    canonical_categories: dict[str, None] = {}
     for item in items:
         if not isinstance(item, Mapping):
             continue
@@ -353,12 +367,12 @@ def purchase_completed_category_updates(
 
         normalized_category = normalize_category(category)
         if normalized_category:
-            categories_by_normalized_name.setdefault(normalized_category, category)
+            canonical_categories.setdefault(normalized_category, None)
 
     purchase_weight = RECENT_EVENT_WEIGHTS["purchase"]
     return [
         (category, purchase_weight)
-        for category in categories_by_normalized_name.values()
+        for category in canonical_categories
     ]
 
 

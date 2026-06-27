@@ -3,6 +3,10 @@
 
 import { useAuthStore } from "./auth-store";
 import { useMLStore } from "./ml-store";
+import {
+  normalizeTrackingUserId,
+  resolveTrackingUserId,
+} from "./tracking-identity";
 
 export type EventType =
   | "page_view"
@@ -67,21 +71,11 @@ const getSessionId = (): string => {
   return sessionId;
 };
 
-const normalizeUserId = (value: unknown): string | null => {
-  if (typeof value !== "string" && typeof value !== "number") {
-    return null;
-  }
-
-  const normalizedValue = String(value).trim();
-  return normalizedValue.length > 0 ? normalizedValue : null;
-};
-
-const getActiveTrackingUserId = (payloadUserId: unknown): string => {
-  const explicitUserId = normalizeUserId(payloadUserId);
-  if (explicitUserId) {
-    return explicitUserId;
-  }
-
+const getActiveTrackingUserId = (
+  payloadUserId: unknown,
+  sessionId: string,
+): string => {
+  let selectedPersonaUserId: string | null = null;
   try {
     const mlState = useMLStore.getState() as {
       isAiEnabled?: boolean;
@@ -96,30 +90,33 @@ const getActiveTrackingUserId = (payloadUserId: unknown): string => {
     };
 
     if (mlState.isAiEnabled || mlState.isMLEnabled) {
-      const mlUserId =
-        normalizeUserId(mlState.userId) ??
-        normalizeUserId(mlState.mlUserId) ??
-        normalizeUserId(mlState.activeUserId) ??
-        normalizeUserId(mlState.selectedUserId) ??
-        normalizeUserId(mlState.persona?.userId) ??
-        normalizeUserId(mlState.persona?.id) ??
-        normalizeUserId(mlState.user?.userId) ??
-        normalizeUserId(mlState.user?.id);
-
-      if (mlUserId) {
-        return mlUserId;
-      }
+      selectedPersonaUserId =
+        normalizeTrackingUserId(mlState.userId) ??
+        normalizeTrackingUserId(mlState.mlUserId) ??
+        normalizeTrackingUserId(mlState.activeUserId) ??
+        normalizeTrackingUserId(mlState.selectedUserId) ??
+        normalizeTrackingUserId(mlState.persona?.userId) ??
+        normalizeTrackingUserId(mlState.persona?.id) ??
+        normalizeTrackingUserId(mlState.user?.userId) ??
+        normalizeTrackingUserId(mlState.user?.id);
     }
   } catch (error) {
     console.warn("[DataLakehouse] Unable to resolve ML tracking user:", error);
   }
 
+  let authenticatedUserId: string | null = null;
   try {
-    return normalizeUserId(useAuthStore.getState().user?.id) ?? "anonymous";
+    authenticatedUserId = normalizeTrackingUserId(useAuthStore.getState().user?.id);
   } catch (error) {
     console.warn("[DataLakehouse] Unable to resolve auth tracking user:", error);
-    return "anonymous";
   }
+
+  return resolveTrackingUserId({
+    explicitUserId: payloadUserId,
+    selectedPersonaUserId,
+    authenticatedUserId,
+    sessionId,
+  });
 };
 
 const getEventCategory = (payload: EventPayload): string | null => {
@@ -140,7 +137,8 @@ const getEventCategory = (payload: EventPayload): string | null => {
  * Uses fire-and-forget async HTTP POST - does NOT block the UI
  */
 export function logEvent(type: EventType, payload: EventPayload = {}): void {
-  const userId = getActiveTrackingUserId(payload.userId);
+  const sessionId = getSessionId();
+  const userId = getActiveTrackingUserId(payload.userId, sessionId);
   const eventCategory = getEventCategory(payload);
   const categoryFields =
     type === "product_click" || type === "product_view"
@@ -152,7 +150,7 @@ export function logEvent(type: EventType, payload: EventPayload = {}): void {
   const enrichedPayload = {
     eventId: generateEventId(),
     timestamp: new Date().toISOString(),
-    sessionId: getSessionId(),
+    sessionId,
     eventType: type,
     ...payload,
     ...categoryFields,

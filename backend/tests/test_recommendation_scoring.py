@@ -11,11 +11,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from recommendation_scoring import (  # noqa: E402
     RecommendationScoringConfig,
+    aggregate_category_scores,
     blend_model_candidates,
     bound_recent_signal,
     finite_float,
     fuse_scores,
     min_max_normalize,
+    normalize_category,
     normalize_weights,
     purchase_completed_category_updates,
     rerank_candidates,
@@ -51,6 +53,50 @@ def enabled_config(**overrides) -> RecommendationScoringConfig:
 )
 def test_finite_float(value, expected) -> None:
     assert finite_float(value) == expected
+
+
+@pytest.mark.parametrize(
+    ("value", "expected"),
+    [
+        ("Home Appliances", "home appliances"),
+        (" HOME   APPLIANCES ", "home appliances"),
+        ("home_appliances", "home appliances"),
+        ("home-appliances", "home appliances"),
+        ("", ""),
+        ("   ", ""),
+        (None, ""),
+        (123, ""),
+        (True, ""),
+    ],
+)
+def test_category_normalization_contract(value, expected) -> None:
+    assert normalize_category(value) == expected
+
+
+def test_alias_aggregation_sums_finite_scores_deterministically() -> None:
+    aliases = {
+        "Home Appliances": 10,
+        "home_appliances": 5,
+        "home-appliances": -2,
+    }
+
+    expected = {"home appliances": 13.0}
+    assert aggregate_category_scores(aliases) == expected
+    assert aggregate_category_scores(dict(reversed(list(aliases.items())))) == expected
+
+
+def test_alias_aggregation_ignores_malformed_values_and_preserves_negative_totals() -> None:
+    scores = {
+        "Books": -10,
+        "books": 2,
+        "": 99,
+        None: 99,
+        "phones": "invalid",
+        "laptops": float("nan"),
+        "televisions": float("inf"),
+    }
+
+    assert aggregate_category_scores(scores) == {"books": -8.0}
 
 
 @pytest.mark.parametrize(
@@ -207,6 +253,41 @@ def test_feature_flag_disabled_preserves_legacy_addition() -> None:
     assert reranked[0]["reranked_score"] == 17.5
 
 
+def test_v1_uses_aggregated_aliases_with_legacy_addition() -> None:
+    items = [
+        {"id": "101", "category": " HOME-APPLIANCES ", "cluster_total_score": 12.0},
+    ]
+    category_scores = {
+        "Home Appliances": 10,
+        "home_appliances": 5,
+        "home-appliances": -2,
+    }
+
+    reranked = rerank_candidates(
+        items,
+        category_scores,
+        RecommendationScoringConfig(enabled=False),
+    )
+
+    assert reranked[0]["reranked_score"] == 25.0
+
+
+def test_v2_uses_aggregated_alias_score_before_tanh() -> None:
+    items = [
+        {"id": "101", "category_main": "home appliances", "cluster_total_score": 12.0},
+    ]
+    category_scores = {
+        "Home Appliances": 10,
+        "home_appliances": 5,
+        "home-appliances": -2,
+    }
+
+    reranked = rerank_candidates(items, category_scores, enabled_config())
+
+    expected = 0.8 * 0.5 + 0.2 * math.tanh(13.0)
+    assert reranked[0]["reranked_score"] == pytest.approx(expected)
+
+
 def test_feature_flag_enabled_uses_v2_without_exposing_debug_fields() -> None:
     items = [
         {"id": "101", "category": "Laptops", "cluster_total_score": 12.5},
@@ -239,7 +320,7 @@ def test_purchase_completed_updates_each_distinct_category_once() -> None:
             ],
         }
     )
-    assert updates == [("Electronics", 10.0), ("Home Appliances", 10.0)]
+    assert updates == [("electronics", 10.0), ("home appliances", 10.0)]
 
 
 def test_purchase_completed_deduplicates_normalized_categories() -> None:
@@ -252,7 +333,7 @@ def test_purchase_completed_deduplicates_normalized_categories() -> None:
             ],
         }
     )
-    assert updates == [("Home Appliances", 10.0)]
+    assert updates == [("home appliances", 10.0)]
 
 
 def test_purchase_completed_ignores_malformed_items_and_empty_categories() -> None:
@@ -269,7 +350,7 @@ def test_purchase_completed_ignores_malformed_items_and_empty_categories() -> No
             ],
         }
     )
-    assert updates == [("Valid Category", 10.0)]
+    assert updates == [("valid category", 10.0)]
 
 
 @pytest.mark.parametrize(
