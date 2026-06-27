@@ -3,7 +3,6 @@ from datetime import datetime, timedelta
 from airflow import DAG
 from airflow.operators.bash import BashOperator
 
-
 default_args = {
     "owner": "airflow",
     "start_date": datetime(2023, 1, 1),
@@ -15,10 +14,10 @@ default_args = {
 with DAG(
     "live_gold_dag",
     default_args=default_args,
-    schedule_interval=None,
+    schedule_interval="*/5 * * * *",
     catchup=False,
     max_active_runs=1,
-    is_paused_upon_creation=True,
+    is_paused_upon_creation=False,
     tags=["transformation", "gold", "live"],
 ) as dag:
     run_live_silver_to_gold = BashOperator(
