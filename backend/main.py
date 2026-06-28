@@ -13,9 +13,12 @@ load_dotenv(dotenv_path=env_path)
 
 from sqlalchemy import text
 from database import engine
-from fastapi import BackgroundTasks, FastAPI, Query
+from fastapi import BackgroundTasks, FastAPI, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from database import (
+    RecommendationInfrastructureError,
+    adapt_recommendation_response,
     get_categories_and_brands_from_db,
     get_categories_from_db,
     get_content_based_recommendations,
@@ -72,6 +75,17 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan)
+
+
+@app.exception_handler(RecommendationInfrastructureError)
+async def recommendation_infrastructure_error_handler(
+    _request: Request,
+    _exc: RecommendationInfrastructureError,
+) -> JSONResponse:
+    return JSONResponse(
+        status_code=503,
+        content={"detail": "Recommendation infrastructure is unavailable"},
+    )
 
 # Backward-compatible name for tests/legacy monkeypatching.
 get_recommendations_from_db = get_recommendations_with_fallback
@@ -332,4 +346,7 @@ def get_products_by_category(selected_category: str) -> list[dict[str, Any]]:
  
 @app.get("/api/recommendations/{user_id}", response_model=list[RecommendationResponse])
 def get_recommendations(user_id: str) -> list[dict[str, Any]]:
-    return get_recommendations_from_db(user_id)
+    return [
+        adapt_recommendation_response(row)
+        for row in get_recommendations_from_db(user_id)
+    ]

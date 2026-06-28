@@ -5,6 +5,7 @@ import os
 import re
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Mapping, Sequence
 
 
@@ -29,11 +30,19 @@ ROLLBACK_STATUS_TRANSITIONS = {
     SUPERSEDED: frozenset({ACTIVE}),
 }
 
-DEFAULT_POSTGRES_DSN = "dbname=data_lakehouse user=user password=password host=postgres port=5432"
-DEFAULT_JDBC_URL = "jdbc:postgresql://postgres:5432/data_lakehouse"
-DEFAULT_POSTGRES_USER = "user"
-DEFAULT_POSTGRES_PASSWORD = "password"
 DEFAULT_JDBC_DRIVER = "org.postgresql.Driver"
+DEFAULT_LOCK_TIMEOUT_MS = 30_000
+DEFAULT_STATEMENT_TIMEOUT_MS = 120_000
+MAX_OPERATION_TIMEOUT_MS = 3_600_000
+SENSITIVE_SOURCE_INFO_TERMS = (
+    "password",
+    "secret",
+    "credential",
+    "dsn",
+    "database_url",
+    "jdbc_url",
+    "access_key",
+)
 
 
 @dataclass(frozen=True)
@@ -372,6 +381,100 @@ def default_manifest() -> dict[str, Any]:
     }
 
 
+def _required_environment_value(source: Mapping[str, str], name: str) -> str:
+    value = source.get(name)
+    if value is None or not str(value).strip():
+        raise ModelPublicationError(f"Required environment variable is missing: {name}")
+    return str(value).strip()
+
+
+def _timeout_ms(
+    source: Mapping[str, str],
+    name: str,
+    default: int,
+) -> int:
+    raw_value = source.get(name, str(default))
+    try:
+        value = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ModelPublicationError(f"{name} must be an integer number of milliseconds") from exc
+    if value <= 0 or value > MAX_OPERATION_TIMEOUT_MS:
+        raise ModelPublicationError(
+            f"{name} must be between 1 and {MAX_OPERATION_TIMEOUT_MS} milliseconds"
+        )
+    return value
+
+
+def resolve_transaction_timeouts(
+    environment: Mapping[str, str] | None = None,
+) -> tuple[int, int]:
+    source = os.environ if environment is None else environment
+    return (
+        _timeout_ms(
+            source,
+            "MODEL_PUBLICATION_LOCK_TIMEOUT_MS",
+            DEFAULT_LOCK_TIMEOUT_MS,
+        ),
+        _timeout_ms(
+            source,
+            "MODEL_PUBLICATION_STATEMENT_TIMEOUT_MS",
+            DEFAULT_STATEMENT_TIMEOUT_MS,
+        ),
+    )
+
+
+def _configure_transaction_timeouts(
+    connection,
+    environment: Mapping[str, str] | None = None,
+) -> None:
+    lock_timeout_ms, statement_timeout_ms = resolve_transaction_timeouts(environment)
+    _execute(
+        connection,
+        """
+        SELECT set_config('lock_timeout', %s, true),
+               set_config('statement_timeout', %s, true)
+        """,
+        (f"{lock_timeout_ms}ms", f"{statement_timeout_ms}ms"),
+    )
+
+
+def sanitize_source_info(source_info: Mapping[str, Any]) -> dict[str, Any]:
+    sanitized: dict[str, Any] = {}
+    for raw_key, value in source_info.items():
+        key = str(raw_key)
+        if any(term in key.lower() for term in SENSITIVE_SOURCE_INFO_TERMS):
+            continue
+        sanitized[key] = value
+    return sanitized
+
+
+def build_component_source_info(
+    *,
+    source_tables: Sequence[str],
+    exporter_name: str,
+    source_paths: Sequence[str] = (),
+    available_metadata: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    tables = [str(table).strip() for table in source_tables if str(table).strip()]
+    if not tables:
+        raise ValueError("At least one source table is required")
+    if not isinstance(exporter_name, str) or not exporter_name.strip():
+        raise ValueError("exporter_name must not be empty")
+
+    source_info: dict[str, Any] = {
+        "source_table": tables[0],
+        "source_tables": tables,
+        "exported_at": datetime.now(timezone.utc).isoformat(),
+        "exporter_name": exporter_name.strip(),
+    }
+    paths = [str(path).strip() for path in source_paths if str(path).strip()]
+    if paths:
+        source_info["source_paths"] = paths
+    if available_metadata:
+        source_info.update(sanitize_source_info(available_metadata))
+    return sanitize_source_info(source_info)
+
+
 def _cursor(connection):
     return connection.cursor()
 
@@ -413,6 +516,7 @@ def create_generation(
     normalized_run_id = normalize_airflow_run_id(airflow_run_id)
     manifest = default_manifest()
     try:
+        _configure_transaction_timeouts(connection)
         if normalized_run_id is None:
             inserted = _execute(
                 connection,
@@ -497,6 +601,7 @@ def fail_generation(
         raise ValueError("failure metadata must be an object")
 
     try:
+        _configure_transaction_timeouts(connection)
         if candidate is not None:
             generation = _fetchone(
                 connection,
@@ -520,7 +625,16 @@ def fail_generation(
                 (normalized_run_id,),
             )
         if generation is None:
-            raise ModelPublicationError("Generation for failure finalization was not found")
+            if candidate is not None:
+                raise ModelPublicationError(
+                    "Generation for failure finalization was not found"
+                )
+            connection.commit()
+            return {
+                "status": "NO_GENERATION_CREATED",
+                "airflow_run_id": normalized_run_id,
+                "finalized": False,
+            }
 
         resolved_generation_id = validate_generation_id(generation[0])
         status = generation[1]
@@ -610,6 +724,7 @@ def _component_records(connection, generation_id: str) -> dict[str, dict[str, An
 def validate_generation(connection, generation_id: str) -> dict[str, Any]:
     candidate = validate_generation_id(generation_id)
     try:
+        _configure_transaction_timeouts(connection)
         generation = _fetchone(
             connection,
             """
@@ -641,6 +756,7 @@ def validate_generation(connection, generation_id: str) -> dict[str, Any]:
             errors.append(f"missing component completion records: {', '.join(missing)}")
 
         component_reports: dict[str, Any] = {}
+        warnings: list[str] = []
         for component_name in REQUIRED_COMPONENTS:
             spec = COMPONENT_SPECS[component_name]
             record = records.get(component_name)
@@ -677,11 +793,13 @@ def validate_generation(connection, generation_id: str) -> dict[str, Any]:
             )
 
             recorded_count = record["row_count"] if record else None
+            source_info = sanitize_source_info(record["source_info"]) if record else None
             component_reports[component_name] = {
                 "actual_row_count": actual_count,
                 "recorded_row_count": recorded_count,
                 "invalid_row_count": invalid_count,
                 "duplicate_key_count": duplicate_count,
+                "source_info": source_info,
             }
 
             if actual_count == 0:
@@ -690,6 +808,13 @@ def validate_generation(connection, generation_id: str) -> dict[str, Any]:
                 errors.append(f"{component_name}: completion status is not COMPLETE")
             if record and not record["source_info"]:
                 errors.append(f"{component_name}: source manifest is missing")
+            if source_info and not any(
+                source_info.get(field)
+                for field in ("training_timestamp", "generated_at", "model_version")
+            ):
+                warnings.append(
+                    f"{component_name}: source training/model timestamp is unavailable"
+                )
             if record and recorded_count != actual_count:
                 errors.append(
                     f"{component_name}: recorded row count {recorded_count} "
@@ -706,6 +831,7 @@ def validate_generation(connection, generation_id: str) -> dict[str, Any]:
             "required_components": list(REQUIRED_COMPONENTS),
             "components": component_reports,
             "errors": errors,
+            "warnings": warnings,
         }
 
         if errors:
@@ -771,6 +897,7 @@ def _assert_components_complete(connection, generation_id: str) -> None:
 def publish_generation(connection, generation_id: str) -> dict[str, Any]:
     candidate = validate_generation_id(generation_id)
     try:
+        _configure_transaction_timeouts(connection)
         # Consistent lock order: pointer, current generation, candidate generation.
         pointer = _fetchone(
             connection,
@@ -885,6 +1012,7 @@ def rollback_generation(
 ) -> dict[str, Any]:
     target = validate_generation_id(generation_id)
     try:
+        _configure_transaction_timeouts(connection)
         # Consistent lock order: pointer, current generation, rollback target.
         pointer = _fetchone(
             connection,
@@ -1032,7 +1160,7 @@ def rollback_generation(
 
 def open_postgres_connection(environment: Mapping[str, str] | None = None):
     source = os.environ if environment is None else environment
-    dsn = source.get("MODEL_PUBLICATION_DATABASE_DSN", DEFAULT_POSTGRES_DSN)
+    dsn = _required_environment_value(source, "MODEL_PUBLICATION_DATABASE_DSN")
     import psycopg2
 
     return psycopg2.connect(dsn)
@@ -1043,12 +1171,9 @@ def resolve_jdbc_config(
 ) -> JdbcConfig:
     source = os.environ if environment is None else environment
     return JdbcConfig(
-        url=source.get("MODEL_PUBLICATION_JDBC_URL", DEFAULT_JDBC_URL),
-        user=source.get("MODEL_PUBLICATION_DB_USER", DEFAULT_POSTGRES_USER),
-        password=source.get(
-            "MODEL_PUBLICATION_DB_PASSWORD",
-            DEFAULT_POSTGRES_PASSWORD,
-        ),
+        url=_required_environment_value(source, "MODEL_PUBLICATION_JDBC_URL"),
+        user=_required_environment_value(source, "MODEL_PUBLICATION_DB_USER"),
+        password=_required_environment_value(source, "MODEL_PUBLICATION_DB_PASSWORD"),
         driver=source.get("MODEL_PUBLICATION_JDBC_DRIVER", DEFAULT_JDBC_DRIVER),
     )
 
@@ -1114,6 +1239,7 @@ def _jdbc_building_generation_transaction(
     connection = _jdbc_connection(spark)
     try:
         connection.setAutoCommit(False)
+        _configure_jdbc_transaction_timeouts(connection)
         lock_statement = connection.prepareStatement(
             """
             SELECT status
@@ -1159,6 +1285,27 @@ def _jdbc_building_generation_transaction(
         raise
     finally:
         _close_jdbc_resource(connection)
+
+
+def _configure_jdbc_transaction_timeouts(
+    connection,
+    environment: Mapping[str, str] | None = None,
+) -> None:
+    lock_timeout_ms, statement_timeout_ms = resolve_transaction_timeouts(environment)
+    statement = connection.prepareStatement(
+        "SELECT set_config('lock_timeout', ?, true), "
+        "set_config('statement_timeout', ?, true)"
+    )
+    result_set = None
+    try:
+        _set_prepared_statement_parameters(
+            statement,
+            (f"{lock_timeout_ms}ms", f"{statement_timeout_ms}ms"),
+        )
+        result_set = statement.executeQuery()
+    finally:
+        _close_jdbc_resource(result_set)
+        _close_jdbc_resource(statement)
 
 
 def retry_cleanup_statements(
@@ -1235,7 +1382,7 @@ def record_component_complete_spark(
                     component_name,
                     row_count,
                     checksum,
-                    json.dumps(dict(source_info), sort_keys=True),
+                    json.dumps(sanitize_source_info(source_info), sort_keys=True),
                 ),
                 expected_row_count=1,
             )

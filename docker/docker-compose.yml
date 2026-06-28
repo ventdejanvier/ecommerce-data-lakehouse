@@ -1,3 +1,16 @@
+x-model-publication-environment: &model-publication-environment
+  MODEL_PUBLICATION_DATABASE_DSN: "dbname=${MODEL_DB_NAME:-data_lakehouse} user=${MODEL_DB_USER:-user} password=${MODEL_DB_PASSWORD:-password} host=postgres port=5432"
+  MODEL_PUBLICATION_JDBC_URL: "jdbc:postgresql://postgres:5432/${MODEL_DB_NAME:-data_lakehouse}"
+  MODEL_PUBLICATION_DB_USER: "${MODEL_DB_USER:-user}"
+  MODEL_PUBLICATION_DB_PASSWORD: "${MODEL_DB_PASSWORD:-password}"
+  MODEL_PUBLICATION_JDBC_DRIVER: "org.postgresql.Driver"
+  MODEL_PUBLICATION_BACKEND_DATABASE_URL: "postgresql+psycopg2://${MODEL_DB_USER:-user}:${MODEL_DB_PASSWORD:-password}@localhost:${MODEL_DB_HOST_PORT:-5434}/${MODEL_DB_NAME:-data_lakehouse}"
+  MODEL_PUBLICATION_DB_ENDPOINT_ALIASES: "${MODEL_PUBLICATION_DB_ENDPOINT_ALIASES:-postgres:5432=localhost:5434}"
+  MODEL_PUBLICATION_V2_ENABLED: "${MODEL_PUBLICATION_V2_ENABLED:-false}"
+  MODEL_PUBLICATION_AUTO_PUBLISH: "${MODEL_PUBLICATION_AUTO_PUBLISH:-false}"
+  MODEL_PUBLICATION_LOCK_TIMEOUT_MS: "${MODEL_PUBLICATION_LOCK_TIMEOUT_MS:-30000}"
+  MODEL_PUBLICATION_STATEMENT_TIMEOUT_MS: "${MODEL_PUBLICATION_STATEMENT_TIMEOUT_MS:-120000}"
+
 services:
   # --- STORAGE LAYER ---
   minio:
@@ -7,8 +20,8 @@ services:
       - "9000:9000"
       - "9001:9001"
     environment:
-      - MINIO_ROOT_USER=admin
-      - MINIO_ROOT_PASSWORD=password
+      MINIO_ROOT_USER: "${MINIO_ACCESS_KEY:-admin}"
+      MINIO_ROOT_PASSWORD: "${MINIO_SECRET_KEY:-password}"
     volumes:
       - ./persistence/minio_data:/data 
     command: server /data --console-address ":9001"
@@ -17,13 +30,18 @@ services:
     image: public.ecr.aws/docker/library/postgres:13-alpine
     container_name: postgres
     ports:
-      - "5434:5432"
+      - "${MODEL_DB_HOST_PORT:-5434}:5432"
     environment:
-      - POSTGRES_USER=user
-      - POSTGRES_PASSWORD=password
-      - POSTGRES_DB=data_lakehouse
+      POSTGRES_USER: "${MODEL_DB_USER:-user}"
+      POSTGRES_PASSWORD: "${MODEL_DB_PASSWORD:-password}"
+      POSTGRES_DB: "${MODEL_DB_NAME:-data_lakehouse}"
     volumes:
       - ./persistence/postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${MODEL_DB_USER:-user} -d ${MODEL_DB_NAME:-data_lakehouse}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
 
   redis:
     image: redis:7-alpine
@@ -76,23 +94,43 @@ services:
 
   # --- AIRFLOW (ORCHESTRATION) ---
   airflow:
-    image: apache/airflow:2.7.1-python3.10
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    image: ecommerce-airflow:2.7.1-python3.10-hole4
     container_name: airflow-webserver
-    user: root
+    user: "${AIRFLOW_UID:-50000}:0"
+    group_add:
+      - "${DOCKER_GID:-0}"
     depends_on:
-      - postgres
+      postgres:
+        condition: service_healthy
     environment:
       # Cấu hình Database
-      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://user:password@postgres/data_lakehouse
+      - AIRFLOW__DATABASE__SQL_ALCHEMY_CONN=postgresql+psycopg2://${MODEL_DB_USER:-user}:${MODEL_DB_PASSWORD:-password}@postgres/${MODEL_DB_NAME:-data_lakehouse}
       - AIRFLOW__CORE__EXECUTOR=LocalExecutor
       # Tắt các DAG mẫu cho sạch máy
       - AIRFLOW__CORE__LOAD_EXAMPLES=False 
-      - _AIRFLOW_WWW_USER_USERNAME=admin
-      - _AIRFLOW_WWW_USER_PASSWORD=admin
+      - _AIRFLOW_WWW_USER_CREATE=true
+      - _AIRFLOW_WWW_USER_USERNAME=${AIRFLOW_ADMIN_USER:-admin}
+      - _AIRFLOW_WWW_USER_PASSWORD=${AIRFLOW_ADMIN_PASSWORD:-admin}
       - _AIRFLOW_WWW_USER_ROLE=Admin
       - _AIRFLOW_WWW_USER_FIRSTNAME=Admin
       - _AIRFLOW_WWW_USER_LASTNAME=Admin
       - _AIRFLOW_WWW_USER_EMAIL=admin@example.com
+      - MODEL_PUBLICATION_DATABASE_DSN=dbname=${MODEL_DB_NAME:-data_lakehouse} user=${MODEL_DB_USER:-user} password=${MODEL_DB_PASSWORD:-password} host=postgres port=5432
+      - MODEL_PUBLICATION_JDBC_URL=jdbc:postgresql://postgres:5432/${MODEL_DB_NAME:-data_lakehouse}
+      - MODEL_PUBLICATION_DB_USER=${MODEL_DB_USER:-user}
+      - MODEL_PUBLICATION_DB_PASSWORD=${MODEL_DB_PASSWORD:-password}
+      - MODEL_PUBLICATION_JDBC_DRIVER=org.postgresql.Driver
+      - MODEL_PUBLICATION_BACKEND_DATABASE_URL=postgresql+psycopg2://${MODEL_DB_USER:-user}:${MODEL_DB_PASSWORD:-password}@localhost:${MODEL_DB_HOST_PORT:-5434}/${MODEL_DB_NAME:-data_lakehouse}
+      - MODEL_PUBLICATION_DB_ENDPOINT_ALIASES=${MODEL_PUBLICATION_DB_ENDPOINT_ALIASES:-postgres:5432=localhost:5434}
+      - MODEL_PUBLICATION_V2_ENABLED=${MODEL_PUBLICATION_V2_ENABLED:-false}
+      - MODEL_PUBLICATION_AUTO_PUBLISH=${MODEL_PUBLICATION_AUTO_PUBLISH:-false}
+      - MODEL_PUBLICATION_LOCK_TIMEOUT_MS=${MODEL_PUBLICATION_LOCK_TIMEOUT_MS:-30000}
+      - MODEL_PUBLICATION_STATEMENT_TIMEOUT_MS=${MODEL_PUBLICATION_STATEMENT_TIMEOUT_MS:-120000}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-admin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-password}
     ports:
       - "8081:8080"
     volumes:
@@ -103,8 +141,26 @@ services:
     command: >
       bash -c "airflow db init &&
       airflow pools set spark_heavy 1 \"Global serialization for Airflow-managed Spark batch tasks\" &&
-      (airflow users create --username admin --password admin --firstname Admin --lastname Admin --role Admin --email admin@example.com || true) &&
       (airflow scheduler & airflow webserver)"
+
+  model-publication-migration:
+    profiles: ["migration"]
+    build:
+      context: .
+      dockerfile: airflow/Dockerfile
+    image: ecommerce-airflow:2.7.1-python3.10-hole4
+    user: "${AIRFLOW_UID:-50000}:0"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      <<: *model-publication-environment
+    volumes:
+      - ./scripts:/opt/model-publication/scripts:ro
+      - ./migrations:/opt/model-publication/migrations:ro
+    entrypoint: ["python", "/opt/model-publication/scripts/model_publication_migration.py"]
+    command: ["preflight"]
+    restart: "no"
 
   # --- HIVE METASTORE (Catalog cho Lakehouse) ---
   # --- DATABASE CHO HIVE METASTORE (Dùng Postgres) ---
@@ -114,15 +170,15 @@ services:
     image: postgres:13-alpine
     container_name: metastore-db
     environment:
-      - POSTGRES_USER=hive
-      - POSTGRES_PASSWORD=hive
-      - POSTGRES_DB=metastore_db
+      - POSTGRES_USER=${HIVE_DB_USER:-hive}
+      - POSTGRES_PASSWORD=${HIVE_DB_PASSWORD:-hive}
+      - POSTGRES_DB=${HIVE_DB_NAME:-metastore_db}
     ports:
       - "5433:5432"
     volumes:
       - ./persistence/metastore_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U hive -d metastore_db"]
+      test: ["CMD-SHELL", "pg_isready -U ${HIVE_DB_USER:-hive} -d ${HIVE_DB_NAME:-metastore_db}"]
       interval: 5s
       timeout: 5s
       retries: 10
@@ -140,15 +196,15 @@ services:
       - SERVICE_NAME=metastore
       - DB_DRIVER=postgres
       - METASTORE_DB_HOSTNAME=metastore-db
-      - SERVICE_OPTS=-Xmx1G -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://metastore-db:5432/metastore_db -Djavax.jdo.option.ConnectionUserName=hive -Djavax.jdo.option.ConnectionPassword=hive
+      - SERVICE_OPTS=-Xmx1G -Djavax.jdo.option.ConnectionDriverName=org.postgresql.Driver -Djavax.jdo.option.ConnectionURL=jdbc:postgresql://metastore-db:5432/${HIVE_DB_NAME:-metastore_db} -Djavax.jdo.option.ConnectionUserName=${HIVE_DB_USER:-hive} -Djavax.jdo.option.ConnectionPassword=${HIVE_DB_PASSWORD:-hive}
       # Cấu hình file hive-site.xml ngay tại đây
       - HIVE_METASTORE_DB_TYPE=postgres
-      - HIVE_METASTORE_JDBC_URL=jdbc:postgresql://metastore-db:5432/metastore_db
-      - HIVE_METASTORE_JDBC_USER=hive
-      - HIVE_METASTORE_JDBC_PASSWORD=hive
+      - HIVE_METASTORE_JDBC_URL=jdbc:postgresql://metastore-db:5432/${HIVE_DB_NAME:-metastore_db}
+      - HIVE_METASTORE_JDBC_USER=${HIVE_DB_USER:-hive}
+      - HIVE_METASTORE_JDBC_PASSWORD=${HIVE_DB_PASSWORD:-hive}
       # MinIO/S3 Config
-      - AWS_ACCESS_KEY_ID=admin
-      - AWS_SECRET_ACCESS_KEY=password
+      - AWS_ACCESS_KEY_ID=${MINIO_ACCESS_KEY:-admin}
+      - AWS_SECRET_ACCESS_KEY=${MINIO_SECRET_KEY:-password}
       - METASTORE_S3_ENDPOINT=http://minio:9000
     healthcheck:
       test: ["CMD-SHELL", "grep -q '237B' /proc/net/tcp || exit 1"]
@@ -169,6 +225,9 @@ services:
       - ./trino/catalog:/etc/trino/catalog # Mount file cấu hình Delta
     depends_on:
       - hive-metastore
+    environment:
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-admin}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-password}
 
   # --- DEVELOPMENT ENVIRONMENT ---
   jupyter:
@@ -186,7 +245,18 @@ services:
     environment:
        - JUPYTER_ENABLE_LAB=yes 
        - JUPYTER_TOKEN=""
-       - PYSPARK_SUBMIT_ARGS=--packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=admin --conf spark.hadoop.fs.s3a.secret.key=password --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem --conf spark.sql.catalogImplementation=hive --conf hive.metastore.uris=thrift://hive-metastore:9083 pyspark-shell
+       - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-admin}
+       - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-password}
+       - MODEL_PUBLICATION_DATABASE_DSN=dbname=${MODEL_DB_NAME:-data_lakehouse} user=${MODEL_DB_USER:-user} password=${MODEL_DB_PASSWORD:-password} host=postgres port=5432
+       - MODEL_PUBLICATION_JDBC_URL=jdbc:postgresql://postgres:5432/${MODEL_DB_NAME:-data_lakehouse}
+       - MODEL_PUBLICATION_DB_USER=${MODEL_DB_USER:-user}
+       - MODEL_PUBLICATION_DB_PASSWORD=${MODEL_DB_PASSWORD:-password}
+       - MODEL_PUBLICATION_JDBC_DRIVER=org.postgresql.Driver
+       - MODEL_PUBLICATION_BACKEND_DATABASE_URL=postgresql+psycopg2://${MODEL_DB_USER:-user}:${MODEL_DB_PASSWORD:-password}@localhost:${MODEL_DB_HOST_PORT:-5434}/${MODEL_DB_NAME:-data_lakehouse}
+       - MODEL_PUBLICATION_DB_ENDPOINT_ALIASES=${MODEL_PUBLICATION_DB_ENDPOINT_ALIASES:-postgres:5432=localhost:5434}
+       - MODEL_PUBLICATION_LOCK_TIMEOUT_MS=${MODEL_PUBLICATION_LOCK_TIMEOUT_MS:-30000}
+       - MODEL_PUBLICATION_STATEMENT_TIMEOUT_MS=${MODEL_PUBLICATION_STATEMENT_TIMEOUT_MS:-120000}
+       - PYSPARK_SUBMIT_ARGS=--packages io.delta:delta-core_2.12:2.1.0,org.apache.hadoop:hadoop-aws:3.3.2 --conf spark.sql.extensions=io.delta.sql.DeltaSparkSessionExtension --conf spark.sql.catalog.spark_catalog=org.apache.spark.sql.delta.catalog.DeltaCatalog --conf spark.hadoop.fs.s3a.endpoint=http://minio:9000 --conf spark.hadoop.fs.s3a.access.key=${MINIO_ACCESS_KEY:-admin} --conf spark.hadoop.fs.s3a.secret.key=${MINIO_SECRET_KEY:-password} --conf spark.hadoop.fs.s3a.path.style.access=true --conf spark.hadoop.fs.s3a.impl=org.apache.hadoop.fs.s3a.S3AFileSystem --conf spark.sql.catalogImplementation=hive --conf hive.metastore.uris=thrift://hive-metastore:9083 pyspark-shell
     command: start-notebook.sh --NotebookApp.token='' --NotebookApp.password=''
     depends_on:
       hive-metastore:

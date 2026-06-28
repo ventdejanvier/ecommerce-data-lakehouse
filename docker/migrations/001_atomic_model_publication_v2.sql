@@ -1,4 +1,12 @@
-BEGIN;
+-- This file is executed transactionally by model_publication_migration.py.
+-- Do not run it through PostgreSQL startup initialization for an existing volume.
+
+CREATE TABLE IF NOT EXISTS public.model_publication_schema_migrations (
+    migration_id TEXT PRIMARY KEY,
+    checksum TEXT NOT NULL,
+    applied_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    applied_by TEXT NOT NULL DEFAULT CURRENT_USER
+);
 
 CREATE TABLE IF NOT EXISTS public.recommendation_generations (
     generation_id VARCHAR(80) PRIMARY KEY,
@@ -206,8 +214,6 @@ BEGIN
     END LOOP;
 END;
 $attach_guards$;
-
-COMMIT;
 
 -- Future cleanup contract (intentionally not automated here):
 -- 1. Retain the active generation and at least its previous generation.

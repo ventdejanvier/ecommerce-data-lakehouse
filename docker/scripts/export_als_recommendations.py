@@ -5,6 +5,7 @@ from pyspark.sql import functions as F
 sys.path.append("/home/jovyan/scripts")
 from common_config import get_spark_session
 from model_publication import (
+    build_component_source_info,
     export_versioned_component_spark,
     resolve_export_plan,
     write_dataframe_to_postgres,
@@ -53,7 +54,11 @@ def export_als_recommendations():
             versioned,
             generation_id,
             "als",
-            {"source": "gold_db.recommendations_als"},
+            build_component_source_info(
+                source_tables=("gold_db.recommendations_als",),
+                source_paths=("s3a://gold/recommendations_als",),
+                exporter_name="export_als_recommendations.py",
+            ),
         )
 
     print(f"SUCCESS: Exported gold_db.recommendations_als to {plan.target_table}")

@@ -5,6 +5,7 @@ from pyspark.sql import functions as F
 sys.path.append("/home/jovyan/scripts")
 from common_config import get_spark_session
 from model_publication import (
+    build_component_source_info,
     export_versioned_component_spark,
     resolve_item_v2_schema,
     resolve_export_plan,
@@ -74,7 +75,11 @@ def export_item_based_recommendations():
             versioned,
             generation_id,
             "item_based",
-            {"source": "gold_db.item_similarity_matrix"},
+            build_component_source_info(
+                source_tables=("gold_db.item_similarity_matrix",),
+                source_paths=("s3a://gold/item_similarity_matrix",),
+                exporter_name="export_item_based.py",
+            ),
         )
 
     print(f"SUCCESS: Exported gold_db.item_similarity_matrix to {plan.target_table}")

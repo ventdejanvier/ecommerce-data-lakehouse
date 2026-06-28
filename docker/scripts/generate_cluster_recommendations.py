@@ -4,6 +4,7 @@ from pyspark.sql.window import Window
 sys.path.append('/home/jovyan/scripts')
 from common_config import get_spark_session
 from model_publication import (
+    build_component_source_info,
     export_versioned_component_spark,
     prepare_component_retry_spark,
     resolve_export_plan,
@@ -85,7 +86,19 @@ def generate_cluster_recs():
             versioned_recommendations,
             generation_id,
             "cluster_recommendations",
-            {"source": "gold_db.user_interactions + gold_db.user_clusters"},
+            build_component_source_info(
+                source_tables=(
+                    "gold_db.user_interactions",
+                    "gold_db.user_clusters",
+                    "gold_db.dim_products",
+                ),
+                source_paths=(
+                    "s3a://gold/user_interactions",
+                    "s3a://gold/user_clusters",
+                    "s3a://gold/dim_products",
+                ),
+                exporter_name="generate_cluster_recommendations.py",
+            ),
             prepare_retry=False,
         )
         export_versioned_component_spark(
@@ -93,7 +106,11 @@ def generate_cluster_recs():
             versioned_clusters,
             generation_id,
             "user_clusters",
-            {"source": "gold_db.user_clusters"},
+            build_component_source_info(
+                source_tables=("gold_db.user_clusters",),
+                source_paths=("s3a://gold/user_clusters",),
+                exporter_name="generate_cluster_recommendations.py",
+            ),
             prepare_retry=False,
         )
 

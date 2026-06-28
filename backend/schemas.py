@@ -47,7 +47,7 @@ class TelemetryEvent(BaseModel):
 
 class RecommendationResponse(BaseModel):
     cluster_id: int
-    product_id: int
+    product_id: str
     display_name: str
     cluster_total_score: float
 

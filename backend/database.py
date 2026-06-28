@@ -10,7 +10,7 @@ from recommendation_scoring import SCORING_CONFIG, blend_model_candidates
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
-    "postgresql://user:password@localhost:5434/data_lakehouse",
+    "postgresql://localhost/data_lakehouse",
 )
 
 engine = create_engine(
@@ -52,6 +52,40 @@ VERSIONED_SERVING_TABLES = {
     "serving_content_based": "serving_content_based_versions",
     "serving_item_based": "serving_item_based_versions",
 }
+VERSIONED_REQUIRED_COLUMNS = {
+    "serving_user_clusters_versions": {
+        "generation_id",
+        "user_id",
+        "cluster_id",
+        "segment_name",
+    },
+    "serving_recommendations_versions": {
+        "generation_id",
+        "cluster_id",
+        "product_id",
+        "display_name",
+        "cluster_total_score",
+    },
+    "serving_als_versions": {"generation_id", "user_id", "product_id", "score"},
+    "serving_content_based_versions": {
+        "generation_id",
+        "user_id",
+        "product_id",
+        "source_product_id",
+        "recommended_product_id",
+        "score",
+    },
+    "serving_item_based_versions": {
+        "generation_id",
+        "source_product_id",
+        "similar_product_id",
+        "score",
+    },
+}
+
+
+class RecommendationInfrastructureError(RuntimeError):
+    """A required V2 serving object or lifecycle invariant is unavailable."""
 
 
 def quote_identifier(identifier: str) -> str:
@@ -85,17 +119,40 @@ def _generation_parameters(
 
 
 def _get_active_generation_id(connection: Connection) -> str:
-    generation_id = connection.execute(
-        text(
-            """
-            SELECT generation_id
-            FROM public.active_recommendation_generation
-            WHERE singleton_key = 1
-            """
+    try:
+        rows = connection.execute(
+            text(
+                """
+                SELECT p.generation_id, g.status
+                FROM public.active_recommendation_generation p
+                LEFT JOIN public.recommendation_generations g
+                  ON g.generation_id = p.generation_id
+                WHERE p.singleton_key = 1
+                """
+            )
+        ).all()
+    except Exception as exc:
+        raise RecommendationInfrastructureError(
+            "Recommendation lifecycle tables are unavailable"
+        ) from exc
+
+    if len(rows) != 1:
+        raise RecommendationInfrastructureError(
+            "Recommendation active pointer must contain exactly one singleton row"
         )
-    ).scalar_one_or_none()
+    generation_id, status = rows[0]
     if generation_id is None or not str(generation_id).strip():
-        raise RuntimeError("No active recommendation generation is published")
+        raise RecommendationInfrastructureError(
+            "No active recommendation generation is published"
+        )
+    if status is None:
+        raise RecommendationInfrastructureError(
+            "Recommendation active pointer references a missing generation"
+        )
+    if str(status) != "ACTIVE":
+        raise RecommendationInfrastructureError(
+            "Recommendation active pointer does not reference an ACTIVE generation"
+        )
     return str(generation_id).strip()
 
 
@@ -118,6 +175,36 @@ def _get_public_table_columns(connection: Connection, table_name: str) -> set[st
         {"table_name": table_name},
     ).scalars()
     return set(result)
+
+
+def _get_serving_table_contract(
+    connection: Connection,
+    legacy_table: str,
+    generation_id: str | None,
+) -> tuple[str, set[str]]:
+    table_name = _serving_table_name(legacy_table, generation_id)
+    try:
+        columns = _get_public_table_columns(connection, table_name)
+    except Exception as exc:
+        if generation_id is not None:
+            raise RecommendationInfrastructureError(
+                f"Required V2 serving table metadata is unavailable: {table_name}"
+            ) from exc
+        raise
+
+    if generation_id is not None:
+        required = VERSIONED_REQUIRED_COLUMNS[table_name]
+        if not columns:
+            raise RecommendationInfrastructureError(
+                f"Required V2 serving table is missing: {table_name}"
+            )
+        missing = sorted(required - columns)
+        if missing:
+            raise RecommendationInfrastructureError(
+                f"Required V2 serving table {table_name} is missing columns: "
+                f"{', '.join(missing)}"
+            )
+    return table_name, columns
 
 
 def _resolve_column(columns: set[str], candidates: tuple[str, ...]) -> str | None:
@@ -191,28 +278,60 @@ def _normalize_recommendation_response(row: dict[str, Any]) -> dict[str, Any]:
     normalized = _normalize_recommendation(row)
     display_name = str(row.get("display_name") or normalized["name"])
     product_id = row.get("product_id")
+    if product_id is None:
+        product_id = normalized.get("id")
+    if product_id is None or str(product_id) == "":
+        raise RecommendationInfrastructureError(
+            "Recommendation row is missing a product identity"
+        )
     cluster_id = row.get("cluster_id", -1)
-    try:
-        response_product_id = int(product_id) if product_id is not None else 0
-    except (TypeError, ValueError):
-        response_product_id = product_id
 
     return {
         "cluster_id": int(cluster_id) if cluster_id is not None else -1,
-        "product_id": response_product_id,
+        "product_id": str(product_id),
         "display_name": display_name,
         "cluster_total_score": normalized["cluster_total_score"],
         **normalized,
     }
 
 
+def adapt_recommendation_response(row: dict[str, Any]) -> dict[str, Any]:
+    """Map either internal recommendation shape to the public legacy schema."""
+    product_id = row.get("product_id")
+    if product_id is None:
+        product_id = row.get("id")
+    if product_id is None or str(product_id) == "":
+        raise RecommendationInfrastructureError(
+            "Recommendation row is missing a product identity"
+        )
+
+    cluster_id = row.get("cluster_id", -1)
+    display_name = row.get("display_name") or row.get("name")
+    if not display_name:
+        display_name = f"Product {product_id}"
+    try:
+        normalized_cluster_id = int(cluster_id) if cluster_id is not None else -1
+        score = float(row.get("cluster_total_score", 0.0) or 0.0)
+    except (TypeError, ValueError) as exc:
+        raise RecommendationInfrastructureError(
+            "Recommendation row contains an invalid score or cluster identity"
+        ) from exc
+
+    return {
+        "cluster_id": normalized_cluster_id,
+        "product_id": str(product_id),
+        "display_name": str(display_name),
+        "cluster_total_score": score,
+    }
+
+
 def _merge_recommendations(
-    existing: dict[int, dict[str, Any]],
+    existing: dict[str, dict[str, Any]],
     incoming: list[dict[str, Any]],
 ) -> None:
     for row in incoming:
         normalized = _normalize_recommendation(row) 
-        product_id = int(normalized["id"]) 
+        product_id = str(normalized["id"])
         current = existing.get(product_id)
         if current is None or normalized["cluster_total_score"] > current["cluster_total_score"]:
             existing[product_id] = normalized
@@ -224,8 +343,11 @@ def _fetch_user_recommendations_from_als(
     limit: int,
     generation_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    table_name = _serving_table_name("serving_als", generation_id)
-    columns = _get_public_table_columns(connection, table_name)
+    table_name, columns = _get_serving_table_contract(
+        connection,
+        "serving_als",
+        generation_id,
+    )
     if not columns:
         return []
 
@@ -287,8 +409,11 @@ def _fetch_user_recommendations_from_content_based(
     limit: int,
     generation_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    table_name = _serving_table_name("serving_content_based", generation_id)
-    columns = _get_public_table_columns(connection, table_name)
+    table_name, columns = _get_serving_table_contract(
+        connection,
+        "serving_content_based",
+        generation_id,
+    )
     if not columns:
         return []
 
@@ -421,8 +546,11 @@ def get_content_based_recommendations(
 ) -> list[dict[str, Any]]:
     with engine.connect() as connection:
         generation_id = _resolve_request_generation(connection)
-        table_name = _serving_table_name("serving_content_based", generation_id)
-        columns = _get_public_table_columns(connection, table_name)
+        table_name, columns = _get_serving_table_contract(
+            connection,
+            "serving_content_based",
+            generation_id,
+        )
         if not columns:
             return _fetch_content_based_dim_product_fallback(connection, product_id, limit)
 
@@ -500,8 +628,11 @@ def get_item_based_recommendations(
 
     with engine.connect() as connection:
         generation_id = _resolve_request_generation(connection)
-        table_name = _serving_table_name("serving_item_based", generation_id)
-        columns = _get_public_table_columns(connection, table_name)
+        table_name, columns = _get_serving_table_contract(
+            connection,
+            "serving_item_based",
+            generation_id,
+        )
         if not columns:
             return []
 
@@ -606,7 +737,7 @@ def _fetch_user_level_recommendations(
         )
         return [_normalize_recommendation(row) for row in blended]
 
-    merged: dict[int, dict[str, Any]] = {}
+    merged: dict[str, dict[str, Any]] = {}
     _merge_recommendations(merged, als_recommendations)
     _merge_recommendations(merged, content_recommendations)
     recommendations = sorted(
@@ -622,8 +753,11 @@ def _fetch_user_cluster_id(
     user_id: str,
     generation_id: str | None = None,
 ) -> int | None:
-    table_name = _serving_table_name("serving_user_clusters", generation_id)
-    columns = _get_public_table_columns(connection, table_name)
+    table_name, columns = _get_serving_table_contract(
+        connection,
+        "serving_user_clusters",
+        generation_id,
+    )
     if not columns:
         return None
 
@@ -653,8 +787,11 @@ def _fetch_cluster_recommendations(
     limit: int,
     generation_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    table_name = _serving_table_name("serving_recommendations", generation_id)
-    columns = _get_public_table_columns(connection, table_name)
+    table_name, columns = _get_serving_table_contract(
+        connection,
+        "serving_recommendations",
+        generation_id,
+    )
     if not columns:
         return []
 
@@ -767,8 +904,11 @@ def _fetch_emergency_recommendations(
     limit: int,
     generation_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    table_name = _serving_table_name("serving_recommendations", generation_id)
-    columns = _get_public_table_columns(connection, table_name)
+    table_name, columns = _get_serving_table_contract(
+        connection,
+        "serving_recommendations",
+        generation_id,
+    )
     if not columns:
         return []
 

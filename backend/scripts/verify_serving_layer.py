@@ -12,9 +12,6 @@ from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Connection
 from sqlalchemy.exc import SQLAlchemyError
 
-DEFAULT_DATABASE_URL = "postgresql://user:password@localhost:5434/data_lakehouse"
-
-
 @dataclass(frozen=True)
 class TableSpec:
     name: str
@@ -199,8 +196,8 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--database-url",
-        default=os.getenv("DATABASE_URL", DEFAULT_DATABASE_URL),
-        help="Postgres SQLAlchemy URL. Defaults to DATABASE_URL or local Docker port 5434.",
+        default=os.getenv("DATABASE_URL"),
+        help="Postgres SQLAlchemy URL. Defaults to DATABASE_URL.",
     )
     parser.add_argument(
         "--strict-multi-engine",
@@ -218,6 +215,8 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if not args.database_url:
+        raise RuntimeError("DATABASE_URL is required")
     engine = create_engine(args.database_url, pool_pre_ping=True)
 
     print(f"Connecting to {redact_url(args.database_url)}")

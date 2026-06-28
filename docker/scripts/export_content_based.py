@@ -5,6 +5,7 @@ from pyspark.sql import functions as F
 sys.path.append("/home/jovyan/scripts")
 from common_config import get_spark_session
 from model_publication import (
+    build_component_source_info,
     export_versioned_component_spark,
     resolve_content_v2_schema,
     resolve_export_plan,
@@ -105,7 +106,11 @@ def export_content_based_recommendations():
             versioned,
             generation_id,
             "content_based",
-            {"source": "gold_db.recommendations_content_based"},
+            build_component_source_info(
+                source_tables=("gold_db.recommendations_content_based",),
+                source_paths=("s3a://gold/recommendations_content_based",),
+                exporter_name="export_content_based.py",
+            ),
         )
 
     print(
