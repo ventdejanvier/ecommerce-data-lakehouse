@@ -3,7 +3,11 @@ from __future__ import annotations
 import argparse
 import json
 
-from model_publication import open_postgres_connection, rollback_generation
+from model_publication import (
+    open_postgres_connection,
+    rollback_generation,
+    validate_generation_id,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -15,11 +19,12 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    generation_id = validate_generation_id(args.generation_id)
     connection = open_postgres_connection()
     try:
         result = rollback_generation(
             connection,
-            args.generation_id,
+            generation_id,
             reason=args.reason,
         )
     finally:

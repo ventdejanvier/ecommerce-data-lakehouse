@@ -17,12 +17,16 @@ ACTIVE = "ACTIVE"
 SUPERSEDED = "SUPERSEDED"
 FAILED = "FAILED"
 
-ALLOWED_STATUS_TRANSITIONS = {
+NORMAL_STATUS_TRANSITIONS = {
     BUILDING: frozenset({READY, FAILED}),
     READY: frozenset({ACTIVE, FAILED}),
     ACTIVE: frozenset({SUPERSEDED}),
     SUPERSEDED: frozenset(),
     FAILED: frozenset(),
+}
+ROLLBACK_STATUS_TRANSITIONS = {
+    ACTIVE: frozenset({SUPERSEDED}),
+    SUPERSEDED: frozenset({ACTIVE}),
 }
 
 DEFAULT_POSTGRES_DSN = "dbname=data_lakehouse user=user password=password host=postgres port=5432"
@@ -64,7 +68,10 @@ COMPONENT_SPECS = {
         invalid_row_predicate=(
             "cluster_id IS NULL OR product_id IS NULL OR display_name IS NULL "
             "OR cluster_total_score IS NULL OR BTRIM(product_id) = '' "
-            "OR BTRIM(display_name) = ''"
+            "OR BTRIM(display_name) = '' "
+            "OR cluster_total_score = 'NaN'::double precision "
+            "OR cluster_total_score = 'Infinity'::double precision "
+            "OR cluster_total_score = '-Infinity'::double precision"
         ),
     ),
     "als": ComponentSpec(
@@ -74,7 +81,10 @@ COMPONENT_SPECS = {
         logical_key_columns=("user_id", "product_id"),
         invalid_row_predicate=(
             "user_id IS NULL OR product_id IS NULL OR score IS NULL "
-            "OR BTRIM(user_id) = '' OR BTRIM(product_id) = ''"
+            "OR BTRIM(user_id) = '' OR BTRIM(product_id) = '' "
+            "OR score = 'NaN'::double precision "
+            "OR score = 'Infinity'::double precision "
+            "OR score = '-Infinity'::double precision"
         ),
     ),
     "content_based": ComponentSpec(
@@ -100,7 +110,10 @@ COMPONENT_SPECS = {
             "(source_product_id IS NOT NULL AND recommended_product_id IS NOT NULL "
             "AND user_id IS NULL AND product_id IS NULL)) OR "
             "COALESCE(BTRIM(user_id), BTRIM(source_product_id), '') = '' OR "
-            "COALESCE(BTRIM(product_id), BTRIM(recommended_product_id), '') = ''"
+            "COALESCE(BTRIM(product_id), BTRIM(recommended_product_id), '') = '' OR "
+            "score = 'NaN'::double precision "
+            "OR score = 'Infinity'::double precision "
+            "OR score = '-Infinity'::double precision"
         ),
     ),
     "item_based": ComponentSpec(
@@ -110,7 +123,10 @@ COMPONENT_SPECS = {
         logical_key_columns=("source_product_id", "similar_product_id"),
         invalid_row_predicate=(
             "source_product_id IS NULL OR similar_product_id IS NULL OR score IS NULL "
-            "OR BTRIM(source_product_id) = '' OR BTRIM(similar_product_id) = ''"
+            "OR BTRIM(source_product_id) = '' OR BTRIM(similar_product_id) = '' "
+            "OR score = 'NaN'::double precision "
+            "OR score = 'Infinity'::double precision "
+            "OR score = '-Infinity'::double precision"
         ),
     ),
 }
@@ -196,8 +212,37 @@ def missing_required_components(component_names: Sequence[str]) -> tuple[str, ..
 
 
 def validate_status_transition(current_status: str, next_status: str) -> None:
-    if next_status not in ALLOWED_STATUS_TRANSITIONS.get(current_status, frozenset()):
-        raise ValueError(f"Invalid generation status transition: {current_status} -> {next_status}")
+    if next_status not in NORMAL_STATUS_TRANSITIONS.get(current_status, frozenset()):
+        raise ValueError(
+            f"Invalid normal generation status transition: {current_status} -> {next_status}"
+        )
+
+
+def validate_rollback_status_transition(current_status: str, next_status: str) -> None:
+    if next_status not in ROLLBACK_STATUS_TRANSITIONS.get(current_status, frozenset()):
+        raise ValueError(
+            f"Invalid rollback generation status transition: {current_status} -> {next_status}"
+        )
+
+
+def component_spec_contract_errors() -> dict[str, tuple[str, ...]]:
+    errors: dict[str, tuple[str, ...]] = {}
+    for component_name, spec in COMPONENT_SPECS.items():
+        missing_columns = tuple(
+            column
+            for column in spec.required_columns
+            if re.search(rf"\b{re.escape(column)}\b", spec.invalid_row_predicate) is None
+        )
+        if missing_columns:
+            errors[component_name] = missing_columns
+    return errors
+
+
+_COMPONENT_SPEC_ERRORS = component_spec_contract_errors()
+if _COMPONENT_SPEC_ERRORS:
+    raise RuntimeError(
+        f"Component validation predicates omit required columns: {_COMPONENT_SPEC_ERRORS}"
+    )
 
 
 def default_manifest() -> dict[str, Any]:
@@ -269,6 +314,16 @@ def _decode_json(value: Any) -> Any:
     if isinstance(value, str):
         return json.loads(value)
     return value
+
+
+def _valid_validation_report(value: Any) -> Mapping[str, Any] | None:
+    try:
+        report = _decode_json(value)
+    except (TypeError, ValueError, json.JSONDecodeError):
+        return None
+    if not isinstance(report, Mapping) or report.get("valid") is not True:
+        return None
+    return report
 
 
 def _component_records(connection, generation_id: str) -> dict[str, dict[str, Any]]:
@@ -394,7 +449,7 @@ def validate_generation(connection, generation_id: str) -> dict[str, Any]:
 
         if errors:
             validate_status_transition(BUILDING, FAILED)
-            _execute(
+            updated = _execute(
                 connection,
                 """
                 UPDATE public.recommendation_generations
@@ -403,6 +458,10 @@ def validate_generation(connection, generation_id: str) -> dict[str, Any]:
                 """,
                 (json.dumps(report, sort_keys=True), candidate),
             )
+            if updated != 1:
+                raise ModelPublicationError(
+                    "Generation status changed while storing failed validation"
+                )
             connection.commit()
             raise GenerationValidationError(report)
 
@@ -451,6 +510,7 @@ def _assert_components_complete(connection, generation_id: str) -> None:
 def publish_generation(connection, generation_id: str) -> dict[str, Any]:
     candidate = validate_generation_id(generation_id)
     try:
+        # Consistent lock order: pointer, current generation, candidate generation.
         pointer = _fetchone(
             connection,
             """
@@ -464,6 +524,28 @@ def publish_generation(connection, generation_id: str) -> dict[str, Any]:
         if pointer is None:
             raise ModelPublicationError("Active-generation singleton row is missing")
         previous_generation_id = pointer[0]
+        if previous_generation_id == candidate:
+            raise ModelPublicationError("Candidate generation is already the active pointer")
+
+        if previous_generation_id:
+            current_row = _fetchone(
+                connection,
+                """
+                SELECT status
+                FROM public.recommendation_generations
+                WHERE generation_id = %s
+                FOR UPDATE
+                """,
+                (previous_generation_id,),
+            )
+            if current_row is None:
+                raise ModelPublicationError(
+                    "Active pointer references a missing generation"
+                )
+            if current_row[0] != ACTIVE:
+                raise ModelPublicationError(
+                    "Active pointer references a generation that is not ACTIVE"
+                )
 
         generation = _fetchone(
             connection,
@@ -480,27 +562,6 @@ def publish_generation(connection, generation_id: str) -> dict[str, Any]:
 
         _assert_components_complete(connection, candidate)
         validate_status_transition(READY, ACTIVE)
-        updated_pointer = _execute(
-            connection,
-            """
-            UPDATE public.active_recommendation_generation
-            SET generation_id = %s, updated_at = NOW()
-            WHERE singleton_key = 1
-            """,
-            (candidate,),
-        )
-        updated_generation = _execute(
-            connection,
-            """
-            UPDATE public.recommendation_generations
-            SET status = 'ACTIVE', published_at = NOW(), previous_generation_id = %s
-            WHERE generation_id = %s AND status = 'READY'
-            """,
-            (previous_generation_id, candidate),
-        )
-        if updated_generation != 1 or updated_pointer != 1:
-            raise ModelPublicationError("Atomic publication update did not affect expected rows")
-
         if previous_generation_id:
             validate_status_transition(ACTIVE, SUPERSEDED)
             updated_previous = _execute(
@@ -516,6 +577,34 @@ def publish_generation(connection, generation_id: str) -> dict[str, Any]:
                 raise ModelPublicationError(
                     "Active pointer references a generation that is not ACTIVE"
                 )
+
+        updated_generation = _execute(
+            connection,
+            """
+            UPDATE public.recommendation_generations
+            SET status = 'ACTIVE', published_at = NOW(), previous_generation_id = %s
+            WHERE generation_id = %s AND status = 'READY'
+            """,
+            (previous_generation_id, candidate),
+        )
+        if updated_generation != 1:
+            raise ModelPublicationError(
+                "Candidate publication update did not affect exactly one row"
+            )
+
+        updated_pointer = _execute(
+            connection,
+            """
+            UPDATE public.active_recommendation_generation
+            SET generation_id = %s, updated_at = NOW()
+            WHERE singleton_key = 1
+            """,
+            (candidate,),
+        )
+        if updated_pointer != 1:
+            raise ModelPublicationError(
+                "Active pointer update did not affect exactly one row"
+            )
         connection.commit()
         return {
             "generation_id": candidate,
@@ -535,6 +624,7 @@ def rollback_generation(
 ) -> dict[str, Any]:
     target = validate_generation_id(generation_id)
     try:
+        # Consistent lock order: pointer, current generation, rollback target.
         pointer = _fetchone(
             connection,
             """
@@ -548,13 +638,33 @@ def rollback_generation(
         if pointer is None:
             raise ModelPublicationError("Active-generation singleton row is missing")
         current = pointer[0]
+        if not current:
+            raise ModelPublicationError("No active generation exists to roll back")
         if current == target:
             raise ModelPublicationError("Target generation is already active")
+
+        current_row = _fetchone(
+            connection,
+            """
+            SELECT status
+            FROM public.recommendation_generations
+            WHERE generation_id = %s
+            FOR UPDATE
+            """,
+            (current,),
+        )
+        if current_row is None:
+            raise ModelPublicationError("Active pointer references a missing generation")
+        if current_row[0] != ACTIVE:
+            raise ModelPublicationError(
+                "Active pointer references a generation that is not ACTIVE"
+            )
 
         target_row = _fetchone(
             connection,
             """
-            SELECT status, validated_at, validation_report
+            SELECT status, validated_at, validation_report,
+                   published_at, previous_generation_id
             FROM public.recommendation_generations
             WHERE generation_id = %s
             FOR UPDATE
@@ -563,36 +673,47 @@ def rollback_generation(
         )
         if (
             target_row is None
-            or target_row[0] not in {READY, SUPERSEDED}
+            or target_row[0] != SUPERSEDED
             or target_row[1] is None
-            or not target_row[2]
+            or _valid_validation_report(target_row[2]) is None
+            or target_row[3] is None
         ):
-            raise ModelPublicationError("Rollback target must be complete and previously validated")
+            raise ModelPublicationError(
+                "Rollback target must be a validated, previously published SUPERSEDED generation"
+            )
 
         _assert_components_complete(connection, target)
-        if current:
-            updated_current = _execute(
-                connection,
-                """
-                UPDATE public.recommendation_generations
-                SET status = 'SUPERSEDED'
-                WHERE generation_id = %s AND status = 'ACTIVE'
-                """,
-                (current,),
+        validate_rollback_status_transition(ACTIVE, SUPERSEDED)
+        validate_rollback_status_transition(SUPERSEDED, ACTIVE)
+
+        updated_current = _execute(
+            connection,
+            """
+            UPDATE public.recommendation_generations
+            SET status = 'SUPERSEDED'
+            WHERE generation_id = %s AND status = 'ACTIVE'
+            """,
+            (current,),
+        )
+        if updated_current != 1:
+            raise ModelPublicationError(
+                "Current generation update did not affect exactly one row"
             )
-            if updated_current != 1:
-                raise ModelPublicationError(
-                    "Active pointer references a generation that is not ACTIVE"
-                )
+
         updated_target = _execute(
             connection,
             """
             UPDATE public.recommendation_generations
-            SET status = 'ACTIVE', published_at = NOW(), previous_generation_id = %s
-            WHERE generation_id = %s AND status IN ('READY', 'SUPERSEDED')
+            SET status = 'ACTIVE'
+            WHERE generation_id = %s AND status = 'SUPERSEDED'
             """,
-            (current, target),
+            (target,),
         )
+        if updated_target != 1:
+            raise ModelPublicationError(
+                "Rollback target update did not affect exactly one row"
+            )
+
         updated_pointer = _execute(
             connection,
             """
@@ -602,7 +723,14 @@ def rollback_generation(
             """,
             (target,),
         )
-        _execute(
+        if updated_pointer != 1:
+            raise ModelPublicationError(
+                "Active pointer update did not affect exactly one row"
+            )
+
+        original_published_at = target_row[3]
+        original_previous_generation_id = target_row[4]
+        audit_updated = _execute(
             connection,
             """
             INSERT INTO public.recommendation_generation_rollbacks
@@ -613,11 +741,23 @@ def rollback_generation(
                 current,
                 target,
                 reason,
-                json.dumps({"source": "internal_cli"}, sort_keys=True),
+                json.dumps(
+                    {
+                        "operation": "rollback",
+                        "source": "internal_cli",
+                        "target_original_published_at": str(original_published_at),
+                        "target_original_previous_generation_id": (
+                            original_previous_generation_id
+                        ),
+                    },
+                    sort_keys=True,
+                ),
             ),
         )
-        if updated_target != 1 or updated_pointer != 1:
-            raise ModelPublicationError("Atomic rollback update did not affect expected rows")
+        if audit_updated != 1:
+            raise ModelPublicationError(
+                "Rollback audit insert did not affect exactly one row"
+            )
         connection.commit()
         return {
             "generation_id": target,
@@ -661,43 +801,60 @@ def _jdbc_connection(spark, environment: Mapping[str, str] | None = None):
     return jvm.java.sql.DriverManager.getConnection(jdbc_url, user, password)
 
 
-def _jdbc_scalar(spark, sql: str, parameters: Sequence[Any]) -> Any:
-    connection = _jdbc_connection(spark)
-    statement = None
-    result_set = None
+def _close_jdbc_resource(resource) -> None:
+    if resource is None:
+        return
     try:
-        statement = connection.prepareStatement(sql)
-        _set_prepared_statement_parameters(statement, parameters)
-        result_set = statement.executeQuery()
-        return result_set.getObject(1) if result_set.next() else None
-    finally:
-        if result_set is not None:
-            result_set.close()
-        if statement is not None:
-            statement.close()
-        connection.close()
+        resource.close()
+    except Exception:
+        pass
 
 
-def _jdbc_transaction(
+def _jdbc_building_generation_transaction(
     spark,
+    generation_id: str,
     statements: Sequence[tuple[str, Sequence[Any]]],
 ) -> None:
+    candidate = validate_generation_id(generation_id)
     connection = _jdbc_connection(spark)
-    connection.setAutoCommit(False)
     try:
+        connection.setAutoCommit(False)
+        lock_statement = connection.prepareStatement(
+            """
+            SELECT status
+            FROM public.recommendation_generations
+            WHERE generation_id = ?
+            FOR UPDATE
+            """
+        )
+        result_set = None
+        try:
+            _set_prepared_statement_parameters(lock_statement, (candidate,))
+            result_set = lock_statement.executeQuery()
+            status = str(result_set.getObject(1)) if result_set.next() else None
+        finally:
+            _close_jdbc_resource(result_set)
+            _close_jdbc_resource(lock_statement)
+
+        if status != BUILDING:
+            raise ModelPublicationError(
+                f"Generation {candidate} must be BUILDING for component mutation; "
+                f"found {status}"
+            )
+
         for sql, parameters in statements:
             statement = connection.prepareStatement(sql)
             try:
                 _set_prepared_statement_parameters(statement, parameters)
                 statement.executeUpdate()
             finally:
-                statement.close()
+                _close_jdbc_resource(statement)
         connection.commit()
     except Exception:
         connection.rollback()
         raise
     finally:
-        connection.close()
+        _close_jdbc_resource(connection)
 
 
 def retry_cleanup_statements(
@@ -727,16 +884,11 @@ def prepare_component_retry_spark(
     component_names: Sequence[str],
 ) -> None:
     candidate = validate_generation_id(generation_id)
-    status = _jdbc_scalar(
+    _jdbc_building_generation_transaction(
         spark,
-        "SELECT status FROM public.recommendation_generations WHERE generation_id = ?",
-        (candidate,),
+        candidate,
+        retry_cleanup_statements(candidate, component_names),
     )
-    if status != BUILDING:
-        raise ModelPublicationError(
-            f"Generation {candidate} must be BUILDING before retry cleanup; found {status}"
-        )
-    _jdbc_transaction(spark, retry_cleanup_statements(candidate, component_names))
 
 
 def record_component_complete_spark(
@@ -754,17 +906,9 @@ def record_component_complete_spark(
         raise ModelPublicationError(
             f"Required component {component_name} must export at least one row"
         )
-    status = _jdbc_scalar(
+    _jdbc_building_generation_transaction(
         spark,
-        "SELECT status FROM public.recommendation_generations WHERE generation_id = ?",
-        (candidate,),
-    )
-    if status != BUILDING:
-        raise ModelPublicationError(
-            f"Generation {candidate} must be BUILDING when recording completion; found {status}"
-        )
-    _jdbc_transaction(
-        spark,
+        candidate,
         [
             (
                 """

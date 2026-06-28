@@ -4,7 +4,11 @@ import argparse
 import json
 import os
 
-from model_publication import open_postgres_connection, publish_generation
+from model_publication import (
+    open_postgres_connection,
+    publish_generation,
+    validate_generation_id,
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -19,9 +23,10 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    generation_id = validate_generation_id(args.generation_id)
     connection = open_postgres_connection()
     try:
-        result = publish_generation(connection, args.generation_id)
+        result = publish_generation(connection, generation_id)
     finally:
         connection.close()
     print(json.dumps(result, sort_keys=True))

@@ -14,6 +14,10 @@ CREATE TABLE IF NOT EXISTS public.recommendation_generations (
     validation_report JSONB
 );
 
+CREATE UNIQUE INDEX IF NOT EXISTS uq_recommendation_generations_one_active
+    ON public.recommendation_generations (status)
+    WHERE status = 'ACTIVE';
+
 CREATE TABLE IF NOT EXISTS public.active_recommendation_generation (
     singleton_key SMALLINT PRIMARY KEY CHECK (singleton_key = 1),
     generation_id VARCHAR(80) REFERENCES public.recommendation_generations(generation_id),

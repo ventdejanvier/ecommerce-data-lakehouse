@@ -8,6 +8,7 @@ from model_publication import (
     GenerationValidationError,
     open_postgres_connection,
     validate_generation,
+    validate_generation_id,
 )
 
 
@@ -23,10 +24,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    generation_id = validate_generation_id(args.generation_id)
     connection = open_postgres_connection()
     try:
         try:
-            report = validate_generation(connection, args.generation_id)
+            report = validate_generation(connection, generation_id)
         except GenerationValidationError as exc:
             print(json.dumps(exc.report, sort_keys=True))
             return 1
