@@ -9,10 +9,20 @@ CREATE TABLE IF NOT EXISTS public.recommendation_generations (
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     validated_at TIMESTAMPTZ,
     published_at TIMESTAMPTZ,
+    failed_at TIMESTAMPTZ,
     previous_generation_id VARCHAR(80) REFERENCES public.recommendation_generations(generation_id),
     manifest JSONB NOT NULL,
-    validation_report JSONB
+    validation_report JSONB,
+    failure_report JSONB
 );
+
+ALTER TABLE public.recommendation_generations
+    ADD COLUMN IF NOT EXISTS failed_at TIMESTAMPTZ,
+    ADD COLUMN IF NOT EXISTS failure_report JSONB;
+
+CREATE UNIQUE INDEX IF NOT EXISTS uq_recommendation_generations_airflow_run
+    ON public.recommendation_generations (airflow_run_id)
+    WHERE airflow_run_id IS NOT NULL;
 
 CREATE UNIQUE INDEX IF NOT EXISTS uq_recommendation_generations_one_active
     ON public.recommendation_generations (status)
@@ -119,6 +129,83 @@ CREATE TABLE IF NOT EXISTS public.recommendation_generation_rollbacks (
     reason TEXT,
     metadata JSONB NOT NULL DEFAULT '{}'::JSONB
 );
+
+-- Correctness guard for late or retried Spark JDBC tasks. This row-level
+-- lifecycle check has runtime cost and must be measured under real export load.
+CREATE OR REPLACE FUNCTION public.guard_building_generation_mutation()
+RETURNS TRIGGER
+LANGUAGE plpgsql
+AS $guard$
+DECLARE
+    old_status VARCHAR(16);
+    new_status VARCHAR(16);
+BEGIN
+    IF TG_OP = 'INSERT' THEN
+        SELECT status INTO new_status
+        FROM public.recommendation_generations
+        WHERE generation_id = NEW.generation_id
+        FOR SHARE;
+        IF new_status IS DISTINCT FROM 'BUILDING' THEN
+            RAISE EXCEPTION 'Versioned serving INSERT requires a BUILDING generation';
+        END IF;
+        RETURN NEW;
+    ELSIF TG_OP = 'UPDATE' THEN
+        SELECT status INTO old_status
+        FROM public.recommendation_generations
+        WHERE generation_id = OLD.generation_id
+        FOR SHARE;
+        SELECT status INTO new_status
+        FROM public.recommendation_generations
+        WHERE generation_id = NEW.generation_id
+        FOR SHARE;
+        IF old_status IS DISTINCT FROM 'BUILDING'
+           OR new_status IS DISTINCT FROM 'BUILDING' THEN
+            RAISE EXCEPTION 'Versioned serving UPDATE requires BUILDING old and new generations';
+        END IF;
+        RETURN NEW;
+    ELSIF TG_OP = 'DELETE' THEN
+        SELECT status INTO old_status
+        FROM public.recommendation_generations
+        WHERE generation_id = OLD.generation_id
+        FOR SHARE;
+        IF old_status IS DISTINCT FROM 'BUILDING' THEN
+            RAISE EXCEPTION 'Versioned serving DELETE requires a BUILDING generation';
+        END IF;
+        RETURN OLD;
+    END IF;
+    RAISE EXCEPTION 'Unsupported operation for versioned serving guard: %', TG_OP;
+END;
+$guard$;
+
+DO $attach_guards$
+DECLARE
+    protected_table TEXT;
+BEGIN
+    FOREACH protected_table IN ARRAY ARRAY[
+        'serving_user_clusters_versions',
+        'serving_recommendations_versions',
+        'serving_als_versions',
+        'serving_content_based_versions',
+        'serving_item_based_versions'
+    ]
+    LOOP
+        IF NOT EXISTS (
+            SELECT 1
+            FROM pg_catalog.pg_trigger
+            WHERE tgname = 'trg_guard_building_generation'
+              AND tgrelid = pg_catalog.to_regclass('public.' || protected_table)
+              AND NOT tgisinternal
+        ) THEN
+            EXECUTE pg_catalog.format(
+                'CREATE TRIGGER trg_guard_building_generation '
+                'BEFORE INSERT OR UPDATE OR DELETE ON public.%I '
+                'FOR EACH ROW EXECUTE FUNCTION public.guard_building_generation_mutation()',
+                protected_table
+            );
+        END IF;
+    END LOOP;
+END;
+$attach_guards$;
 
 COMMIT;
 

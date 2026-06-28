@@ -82,7 +82,7 @@ class FakeJdbcStatement:
         self.connection.events.append(("update", self.sql, dict(self.parameters)))
         if self.connection.fail_on_update:
             raise RuntimeError("simulated JDBC mutation failure")
-        return 1
+        return self.connection.update_result
 
     def close(self) -> None:
         self.closed = True
@@ -90,9 +90,16 @@ class FakeJdbcStatement:
 
 
 class FakeJdbcConnection:
-    def __init__(self, status: str | None, *, fail_on_update: bool = False) -> None:
+    def __init__(
+        self,
+        status: str | None,
+        *,
+        fail_on_update: bool = False,
+        update_result: int = 1,
+    ) -> None:
         self.status = status
         self.fail_on_update = fail_on_update
+        self.update_result = update_result
         self.events: list[tuple[object, ...]] = []
         self.commits = 0
         self.rollbacks = 0
@@ -252,11 +259,18 @@ def test_retry_cleanup_is_restricted_to_one_generation() -> None:
         ("cluster_recommendations", "user_clusters"),
     )
     assert len(statements) == 4
-    assert all(GENERATION_ID in parameters for _, parameters in statements)
-    assert all("serving_recommendations " not in sql for sql, _ in statements)
-    assert all("serving_user_clusters " not in sql for sql, _ in statements)
-    assert any("serving_recommendations_versions" in sql for sql, _ in statements)
-    assert any("serving_user_clusters_versions" in sql for sql, _ in statements)
+    assert all(GENERATION_ID in mutation.parameters for mutation in statements)
+    assert all(
+        "serving_recommendations " not in mutation.sql for mutation in statements
+    )
+    assert all("serving_user_clusters " not in mutation.sql for mutation in statements)
+    assert any(
+        "serving_recommendations_versions" in mutation.sql for mutation in statements
+    )
+    assert any(
+        "serving_user_clusters_versions" in mutation.sql for mutation in statements
+    )
+    assert all(mutation.expected_row_count is None for mutation in statements)
 
 
 def install_jdbc_connection(monkeypatch, connection: FakeJdbcConnection):
@@ -329,6 +343,23 @@ def test_jdbc_component_completion_uses_locked_single_transaction(monkeypatch) -
     assert "recommendation_generation_components" in connection.events[update_index][1]
     assert connection.commits == 1
     assert connection.rollbacks == 0
+
+
+def test_jdbc_component_completion_zero_rows_rolls_back(monkeypatch) -> None:
+    connection = FakeJdbcConnection(publication.BUILDING, update_result=0)
+    install_jdbc_connection(monkeypatch, connection)
+
+    with pytest.raises(publication.ModelPublicationError, match="expected 1"):
+        publication.record_component_complete_spark(
+            None,
+            GENERATION_ID,
+            "als",
+            12,
+            {"source": "gold_db.recommendations_als"},
+        )
+
+    assert connection.commits == 0
+    assert connection.rollbacks == 1
 
 
 @pytest.mark.parametrize(

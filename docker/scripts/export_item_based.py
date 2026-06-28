@@ -5,35 +5,19 @@ from pyspark.sql import functions as F
 sys.path.append("/home/jovyan/scripts")
 from common_config import get_spark_session
 from model_publication import (
-    prepare_component_retry_spark,
-    record_component_complete_spark,
+    export_versioned_component_spark,
+    resolve_item_v2_schema,
     resolve_export_plan,
+    write_dataframe_to_postgres,
 )
-
-
-POSTGRES_URL = "jdbc:postgresql://postgres:5432/data_lakehouse"
-POSTGRES_PROPERTIES = {
-    "user": "user",
-    "password": "password",
-    "driver": "org.postgresql.Driver",
-}
 
 
 def export_dataframe_to_postgres(
     df,
     table_name: str,
-    jdbc_url: str,
     mode: str = "overwrite",
 ):
-    df.write \
-        .format("jdbc") \
-        .option("url", jdbc_url) \
-        .option("dbtable", table_name) \
-        .option("user", POSTGRES_PROPERTIES["user"]) \
-        .option("password", POSTGRES_PROPERTIES["password"]) \
-        .option("driver", POSTGRES_PROPERTIES["driver"]) \
-        .mode(mode) \
-        .save()
+    write_dataframe_to_postgres(df, table_name, mode)
 
 
 def require_min_columns(cols: list[str], table_name: str) -> None:
@@ -50,49 +34,46 @@ def export_item_based_recommendations():
 
     item_similarity = spark.table("gold_db.item_similarity_matrix")
     cols = item_similarity.columns
-    require_min_columns(cols, "gold_db.item_similarity_matrix")
 
-    recommendations = item_similarity \
-        .select(
-            F.col(cols[0]).cast("string").alias("source_product_id"),
-            F.col(cols[1]).cast("string").alias("similar_product_id"),
-            F.col(cols[2]).cast("double").alias("score"),
-        ) \
-        .filter(
+    if not plan.v2_enabled:
+        require_min_columns(cols, "gold_db.item_similarity_matrix")
+        recommendations = item_similarity \
+            .select(
+                F.col(cols[0]).cast("string").alias("source_product_id"),
+                F.col(cols[1]).cast("string").alias("similar_product_id"),
+                F.col(cols[2]).cast("double").alias("score"),
+            ) \
+            .filter(
+                F.col("source_product_id").isNotNull()
+                & F.col("similar_product_id").isNotNull()
+                & F.col("score").isNotNull()
+            )
+        export_dataframe_to_postgres(
+            recommendations,
+            plan.target_table,
+        )
+    else:
+        generation_id = plan.generation_id
+        mapping = resolve_item_v2_schema(cols)
+        versioned = item_similarity.select(
+            F.lit(generation_id).alias("generation_id"),
+            F.col(mapping["source_product_id"])
+            .cast("string")
+            .alias("source_product_id"),
+            F.col(mapping["similar_product_id"])
+            .cast("string")
+            .alias("similar_product_id"),
+            F.col(mapping["score"]).cast("double").alias("score"),
+        ).filter(
             F.col("source_product_id").isNotNull()
             & F.col("similar_product_id").isNotNull()
             & F.col("score").isNotNull()
         )
-
-    if not plan.v2_enabled:
-        export_dataframe_to_postgres(
-            recommendations,
-            plan.target_table,
-            POSTGRES_URL,
-        )
-    else:
-        generation_id = plan.generation_id
-        versioned = recommendations.select(
-            F.lit(generation_id).alias("generation_id"),
-            "source_product_id",
-            "similar_product_id",
-            "score",
-        )
-        row_count = versioned.count()
-        if row_count <= 0:
-            raise RuntimeError("Item-based is a required component and cannot be empty")
-        prepare_component_retry_spark(spark, generation_id, ("item_based",))
-        export_dataframe_to_postgres(
-            versioned,
-            plan.target_table,
-            POSTGRES_URL,
-            plan.write_mode,
-        )
-        record_component_complete_spark(
+        export_versioned_component_spark(
             spark,
+            versioned,
             generation_id,
             "item_based",
-            row_count,
             {"source": "gold_db.item_similarity_matrix"},
         )
 

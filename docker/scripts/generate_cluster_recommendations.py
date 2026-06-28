@@ -4,22 +4,15 @@ from pyspark.sql.window import Window
 sys.path.append('/home/jovyan/scripts')
 from common_config import get_spark_session
 from model_publication import (
+    export_versioned_component_spark,
     prepare_component_retry_spark,
-    record_component_complete_spark,
     resolve_export_plan,
+    write_dataframe_to_postgres,
 )
 
 
 def export_to_postgres(df, table_name: str, mode: str = "overwrite"):
-    df.write \
-        .format("jdbc") \
-        .option("url", "jdbc:postgresql://postgres:5432/data_lakehouse") \
-        .option("dbtable", table_name) \
-        .option("user", "user") \
-        .option("password", "password") \
-        .option("driver", "org.postgresql.Driver") \
-        .mode(mode) \
-        .save()
+    write_dataframe_to_postgres(df, table_name, mode)
 
 
 def generate_cluster_recs():
@@ -47,7 +40,10 @@ def generate_cluster_recs():
     )
 
     # Dùng Window function để lấy Top 10 của từng cụm
-    window_spec = Window.partitionBy("cluster_id").orderBy(F.desc("cluster_total_score"))
+    window_spec = Window.partitionBy("cluster_id").orderBy(
+        F.desc("cluster_total_score"),
+        F.col("product_id").cast("string").asc(),
+    )
     
     final_cluster_recs = cluster_top_products.withColumn("rank", F.row_number().over(window_spec)) \
         .filter(F.col("rank") <= 10) \
@@ -79,39 +75,26 @@ def generate_cluster_recs():
             F.col("cluster_id").cast("int").alias("cluster_id"),
             F.col("segment_name").cast("string").alias("segment_name"),
         )
-        recommendation_count = versioned_recommendations.count()
-        cluster_count = versioned_clusters.count()
-        if recommendation_count <= 0 or cluster_count <= 0:
-            raise RuntimeError("Cluster serving components must both contain rows")
-
         prepare_component_retry_spark(
             spark,
             generation_id,
             ("cluster_recommendations", "user_clusters"),
         )
-        export_to_postgres(
-            versioned_recommendations,
-            recommendation_plan.target_table,
-            recommendation_plan.write_mode,
-        )
-        record_component_complete_spark(
+        export_versioned_component_spark(
             spark,
+            versioned_recommendations,
             generation_id,
             "cluster_recommendations",
-            recommendation_count,
             {"source": "gold_db.user_interactions + gold_db.user_clusters"},
+            prepare_retry=False,
         )
-        export_to_postgres(
-            versioned_clusters,
-            cluster_plan.target_table,
-            cluster_plan.write_mode,
-        )
-        record_component_complete_spark(
+        export_versioned_component_spark(
             spark,
+            versioned_clusters,
             generation_id,
             "user_clusters",
-            cluster_count,
             {"source": "gold_db.user_clusters"},
+            prepare_retry=False,
         )
 
     print("SUCCESS: Đã kết nối K-Means với Hệ gợi ý thành công!")

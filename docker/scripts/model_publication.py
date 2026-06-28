@@ -4,7 +4,7 @@ import json
 import os
 import re
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
 
@@ -33,6 +33,7 @@ DEFAULT_POSTGRES_DSN = "dbname=data_lakehouse user=user password=password host=p
 DEFAULT_JDBC_URL = "jdbc:postgresql://postgres:5432/data_lakehouse"
 DEFAULT_POSTGRES_USER = "user"
 DEFAULT_POSTGRES_PASSWORD = "password"
+DEFAULT_JDBC_DRIVER = "org.postgresql.Driver"
 
 
 @dataclass(frozen=True)
@@ -142,6 +143,21 @@ class ExportPlan:
     write_mode: str
 
 
+@dataclass(frozen=True)
+class JdbcConfig:
+    url: str
+    user: str
+    password: str = field(repr=False)
+    driver: str = DEFAULT_JDBC_DRIVER
+
+
+@dataclass(frozen=True)
+class JdbcMutation:
+    sql: str
+    parameters: tuple[Any, ...]
+    expected_row_count: int | None = None
+
+
 class ModelPublicationError(RuntimeError):
     pass
 
@@ -163,6 +179,15 @@ def validate_generation_id(generation_id: Any) -> str:
     if not GENERATION_ID_PATTERN.fullmatch(normalized):
         raise ValueError("generation_id contains unsupported characters")
     return normalized
+
+
+def normalize_airflow_run_id(airflow_run_id: Any) -> str | None:
+    if airflow_run_id is None:
+        return None
+    if not isinstance(airflow_run_id, str):
+        raise ValueError("airflow_run_id must be a string when provided")
+    normalized = airflow_run_id.strip()
+    return normalized or None
 
 
 def parse_boolean(value: Any, *, name: str) -> bool:
@@ -197,6 +222,99 @@ def resolve_export_plan(
         return ExportPlan(False, None, legacy_table, "overwrite")
     generation_id = require_generation_id(environment)
     return ExportPlan(True, generation_id, spec.version_table, "append")
+
+
+def _resolve_explicit_schema_contract(
+    columns: Sequence[str],
+    contracts: Sequence[tuple[str, Mapping[str, str]]],
+    *,
+    table_name: str,
+) -> tuple[str, dict[str, str]]:
+    column_list = list(columns)
+    if len(column_list) != len(set(column_list)):
+        raise ValueError(f"{table_name} contains duplicate column names")
+    available = set(column_list)
+    matches = [
+        (form, dict(mapping))
+        for form, mapping in contracts
+        if set(mapping.values()).issubset(available)
+    ]
+    if len(matches) != 1:
+        raise ValueError(
+            f"{table_name} must match exactly one supported V2 schema; "
+            f"found {len(matches)} matches for columns {sorted(available)}"
+        )
+
+    selected_form, selected_mapping = matches[0]
+    selected_sources = set(selected_mapping.values())
+    foreign_shape_columns = set().union(
+        *(
+            set(mapping.values()) - selected_sources
+            for form, mapping in contracts
+            if form != selected_form
+        )
+    )
+    mixed = sorted(available & foreign_shape_columns)
+    if mixed:
+        raise ValueError(
+            f"{table_name} mixes V2 logical schemas through columns: {mixed}"
+        )
+    return selected_form, selected_mapping
+
+
+def resolve_content_v2_schema(columns: Sequence[str]) -> tuple[str, dict[str, str]]:
+    return _resolve_explicit_schema_contract(
+        columns,
+        (
+            (
+                "user_level",
+                {"user_id": "user_id", "product_id": "product_id", "score": "score"},
+            ),
+            (
+                "item_to_item",
+                {
+                    "source_product_id": "source_product_id",
+                    "recommended_product_id": "recommended_product_id",
+                    "score": "score",
+                },
+            ),
+            (
+                "item_to_item_verified_aliases",
+                {
+                    "source_product_id": "product_id_1",
+                    "recommended_product_id": "product_id_2",
+                    "score": "content_score",
+                },
+            ),
+        ),
+        table_name="gold_db.recommendations_content_based",
+    )
+
+
+def resolve_item_v2_schema(columns: Sequence[str]) -> dict[str, str]:
+    _form, mapping = _resolve_explicit_schema_contract(
+        columns,
+        (
+            (
+                "canonical",
+                {
+                    "source_product_id": "source_product_id",
+                    "similar_product_id": "similar_product_id",
+                    "score": "score",
+                },
+            ),
+            (
+                "verified_aliases",
+                {
+                    "source_product_id": "product_id_1",
+                    "similar_product_id": "product_id_2",
+                    "score": "similarity",
+                },
+            ),
+        ),
+        table_name="gold_db.item_similarity_matrix",
+    )
+    return mapping
 
 
 def require_component(component_name: str) -> ComponentSpec:
@@ -292,22 +410,165 @@ def create_generation(
     generation_id: str | None = None,
 ) -> str:
     candidate = validate_generation_id(generation_id or str(uuid.uuid4()))
+    normalized_run_id = normalize_airflow_run_id(airflow_run_id)
     manifest = default_manifest()
     try:
-        _execute(
-            connection,
-            """
-            INSERT INTO public.recommendation_generations
-                (generation_id, airflow_run_id, status, manifest)
-            VALUES (%s, %s, 'BUILDING', %s::jsonb)
-            """,
-            (candidate, airflow_run_id, json.dumps(manifest, sort_keys=True)),
-        )
+        if normalized_run_id is None:
+            inserted = _execute(
+                connection,
+                """
+                INSERT INTO public.recommendation_generations
+                    (generation_id, airflow_run_id, status, manifest)
+                VALUES (%s, NULL, 'BUILDING', %s::jsonb)
+                """,
+                (candidate, json.dumps(manifest, sort_keys=True)),
+            )
+            if inserted != 1:
+                raise ModelPublicationError(
+                    "Generation creation did not affect exactly one row"
+                )
+        else:
+            inserted_row = _fetchone(
+                connection,
+                """
+                INSERT INTO public.recommendation_generations
+                    (generation_id, airflow_run_id, status, manifest)
+                VALUES (%s, %s, 'BUILDING', %s::jsonb)
+                ON CONFLICT (airflow_run_id) WHERE airflow_run_id IS NOT NULL
+                DO NOTHING
+                RETURNING generation_id, status
+                """,
+                (
+                    candidate,
+                    normalized_run_id,
+                    json.dumps(manifest, sort_keys=True),
+                ),
+            )
+            if inserted_row is None:
+                existing = _fetchone(
+                    connection,
+                    """
+                    SELECT generation_id, status
+                    FROM public.recommendation_generations
+                    WHERE airflow_run_id = %s
+                    FOR UPDATE
+                    """,
+                    (normalized_run_id,),
+                )
+                if existing is None:
+                    raise ModelPublicationError(
+                        "Concurrent generation creation could not resolve its Airflow run"
+                    )
+                existing_generation_id, existing_status = existing
+                if existing_status != BUILDING:
+                    raise ModelPublicationError(
+                        f"Airflow run {normalized_run_id!r} already owns a "
+                        f"{existing_status} generation"
+                    )
+                candidate = validate_generation_id(existing_generation_id)
+            else:
+                candidate = validate_generation_id(inserted_row[0])
+                if inserted_row[1] != BUILDING:
+                    raise ModelPublicationError(
+                        "New generation was not created in BUILDING state"
+                    )
         connection.commit()
     except Exception:
         connection.rollback()
         raise
     return candidate
+
+
+def fail_generation(
+    connection,
+    generation_id: str | None,
+    *,
+    reason: str,
+    metadata: Mapping[str, Any] | None = None,
+    airflow_run_id: str | None = None,
+) -> dict[str, Any]:
+    candidate = validate_generation_id(generation_id) if generation_id else None
+    normalized_run_id = normalize_airflow_run_id(airflow_run_id)
+    if candidate is None and normalized_run_id is None:
+        raise ValueError("generation_id or airflow_run_id is required")
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("failure reason must not be empty")
+    if metadata is not None and not isinstance(metadata, Mapping):
+        raise ValueError("failure metadata must be an object")
+
+    try:
+        if candidate is not None:
+            generation = _fetchone(
+                connection,
+                """
+                SELECT generation_id, status, airflow_run_id
+                FROM public.recommendation_generations
+                WHERE generation_id = %s
+                FOR UPDATE
+                """,
+                (candidate,),
+            )
+        else:
+            generation = _fetchone(
+                connection,
+                """
+                SELECT generation_id, status, airflow_run_id
+                FROM public.recommendation_generations
+                WHERE airflow_run_id = %s
+                FOR UPDATE
+                """,
+                (normalized_run_id,),
+            )
+        if generation is None:
+            raise ModelPublicationError("Generation for failure finalization was not found")
+
+        resolved_generation_id = validate_generation_id(generation[0])
+        status = generation[1]
+        stored_run_id = normalize_airflow_run_id(generation[2])
+        if normalized_run_id is not None and stored_run_id != normalized_run_id:
+            raise ModelPublicationError(
+                "Generation does not belong to the supplied Airflow run"
+            )
+        if status == FAILED:
+            connection.commit()
+            return {
+                "generation_id": resolved_generation_id,
+                "status": FAILED,
+                "already_failed": True,
+            }
+        if status != BUILDING:
+            raise ModelPublicationError(
+                f"Only a BUILDING generation may be failed; found {status}"
+            )
+
+        validate_status_transition(BUILDING, FAILED)
+        report = {
+            "reason": reason.strip(),
+            "airflow_run_id": stored_run_id,
+            "metadata": dict(metadata or {}),
+        }
+        updated = _execute(
+            connection,
+            """
+            UPDATE public.recommendation_generations
+            SET status = 'FAILED', failed_at = NOW(), failure_report = %s::jsonb
+            WHERE generation_id = %s AND status = 'BUILDING'
+            """,
+            (json.dumps(report, sort_keys=True), resolved_generation_id),
+        )
+        if updated != 1:
+            raise ModelPublicationError(
+                "Failure finalization did not affect exactly one BUILDING generation"
+            )
+        connection.commit()
+        return {
+            "generation_id": resolved_generation_id,
+            "status": FAILED,
+            "already_failed": False,
+        }
+    except Exception:
+        connection.rollback()
+        raise
 
 
 def _decode_json(value: Any) -> Any:
@@ -777,6 +1038,39 @@ def open_postgres_connection(environment: Mapping[str, str] | None = None):
     return psycopg2.connect(dsn)
 
 
+def resolve_jdbc_config(
+    environment: Mapping[str, str] | None = None,
+) -> JdbcConfig:
+    source = os.environ if environment is None else environment
+    return JdbcConfig(
+        url=source.get("MODEL_PUBLICATION_JDBC_URL", DEFAULT_JDBC_URL),
+        user=source.get("MODEL_PUBLICATION_DB_USER", DEFAULT_POSTGRES_USER),
+        password=source.get(
+            "MODEL_PUBLICATION_DB_PASSWORD",
+            DEFAULT_POSTGRES_PASSWORD,
+        ),
+        driver=source.get("MODEL_PUBLICATION_JDBC_DRIVER", DEFAULT_JDBC_DRIVER),
+    )
+
+
+def write_dataframe_to_postgres(
+    dataframe,
+    table_name: str,
+    mode: str = "overwrite",
+    environment: Mapping[str, str] | None = None,
+) -> None:
+    config = resolve_jdbc_config(environment)
+    dataframe.write \
+        .format("jdbc") \
+        .option("url", config.url) \
+        .option("dbtable", table_name) \
+        .option("user", config.user) \
+        .option("password", config.password) \
+        .option("driver", config.driver) \
+        .mode(mode) \
+        .save()
+
+
 def _set_prepared_statement_parameters(statement, parameters: Sequence[Any]) -> None:
     for index, value in enumerate(parameters, start=1):
         if value is None:
@@ -792,13 +1086,14 @@ def _set_prepared_statement_parameters(statement, parameters: Sequence[Any]) -> 
 
 
 def _jdbc_connection(spark, environment: Mapping[str, str] | None = None):
-    source = os.environ if environment is None else environment
-    jdbc_url = source.get("MODEL_PUBLICATION_JDBC_URL", DEFAULT_JDBC_URL)
-    user = source.get("MODEL_PUBLICATION_DB_USER", DEFAULT_POSTGRES_USER)
-    password = source.get("MODEL_PUBLICATION_DB_PASSWORD", DEFAULT_POSTGRES_PASSWORD)
+    config = resolve_jdbc_config(environment)
     jvm = spark.sparkContext._gateway.jvm
-    jvm.java.lang.Class.forName("org.postgresql.Driver")
-    return jvm.java.sql.DriverManager.getConnection(jdbc_url, user, password)
+    jvm.java.lang.Class.forName(config.driver)
+    return jvm.java.sql.DriverManager.getConnection(
+        config.url,
+        config.user,
+        config.password,
+    )
 
 
 def _close_jdbc_resource(resource) -> None:
@@ -813,7 +1108,7 @@ def _close_jdbc_resource(resource) -> None:
 def _jdbc_building_generation_transaction(
     spark,
     generation_id: str,
-    statements: Sequence[tuple[str, Sequence[Any]]],
+    statements: Sequence[JdbcMutation],
 ) -> None:
     candidate = validate_generation_id(generation_id)
     connection = _jdbc_connection(spark)
@@ -842,11 +1137,20 @@ def _jdbc_building_generation_transaction(
                 f"found {status}"
             )
 
-        for sql, parameters in statements:
-            statement = connection.prepareStatement(sql)
+        for mutation in statements:
+            statement = connection.prepareStatement(mutation.sql)
             try:
-                _set_prepared_statement_parameters(statement, parameters)
-                statement.executeUpdate()
+                _set_prepared_statement_parameters(statement, mutation.parameters)
+                affected_rows = int(statement.executeUpdate())
+                if (
+                    mutation.expected_row_count is not None
+                    and affected_rows != mutation.expected_row_count
+                ):
+                    raise ModelPublicationError(
+                        "JDBC mutation affected "
+                        f"{affected_rows} row(s); expected "
+                        f"{mutation.expected_row_count}"
+                    )
             finally:
                 _close_jdbc_resource(statement)
         connection.commit()
@@ -860,16 +1164,19 @@ def _jdbc_building_generation_transaction(
 def retry_cleanup_statements(
     generation_id: str,
     component_names: Sequence[str],
-) -> list[tuple[str, tuple[Any, ...]]]:
+) -> list[JdbcMutation]:
     candidate = validate_generation_id(generation_id)
-    statements: list[tuple[str, tuple[Any, ...]]] = []
+    statements: list[JdbcMutation] = []
     for component_name in component_names:
         spec = require_component(component_name)
         statements.append(
-            (f"DELETE FROM {spec.version_table} WHERE generation_id = ?", (candidate,))
+            JdbcMutation(
+                f"DELETE FROM {spec.version_table} WHERE generation_id = ?",
+                (candidate,),
+            )
         )
         statements.append(
-            (
+            JdbcMutation(
                 "DELETE FROM public.recommendation_generation_components "
                 "WHERE generation_id = ? AND component_name = ?",
                 (candidate, component_name),
@@ -910,7 +1217,7 @@ def record_component_complete_spark(
         spark,
         candidate,
         [
-            (
+            JdbcMutation(
                 """
                 INSERT INTO public.recommendation_generation_components
                     (generation_id, component_name, row_count, completion_status,
@@ -930,6 +1237,81 @@ def record_component_complete_spark(
                     checksum,
                     json.dumps(dict(source_info), sort_keys=True),
                 ),
+                expected_row_count=1,
             )
         ],
     )
+
+
+def count_component_rows_spark(
+    spark,
+    generation_id: str,
+    component_name: str,
+) -> int:
+    candidate = validate_generation_id(generation_id)
+    spec = require_component(component_name)
+    connection = _jdbc_connection(spark)
+    statement = None
+    result_set = None
+    try:
+        statement = connection.prepareStatement(
+            f"SELECT COUNT(*) FROM {spec.version_table} WHERE generation_id = ?"
+        )
+        _set_prepared_statement_parameters(statement, (candidate,))
+        result_set = statement.executeQuery()
+        if not result_set.next():
+            raise ModelPublicationError(
+                f"Stored-row count query returned no result for {component_name}"
+            )
+        return int(result_set.getObject(1))
+    finally:
+        _close_jdbc_resource(result_set)
+        _close_jdbc_resource(statement)
+        _close_jdbc_resource(connection)
+
+
+def export_versioned_component_spark(
+    spark,
+    dataframe,
+    generation_id: str,
+    component_name: str,
+    source_info: Mapping[str, Any],
+    *,
+    prepare_retry: bool = True,
+) -> int:
+    candidate = validate_generation_id(generation_id)
+    spec = require_component(component_name)
+    persisted = dataframe.persist()
+    try:
+        expected_count = int(persisted.count())
+        if expected_count <= 0:
+            raise ModelPublicationError(
+                f"Required component {component_name} cannot be empty"
+            )
+        if prepare_retry:
+            prepare_component_retry_spark(spark, candidate, (component_name,))
+        write_dataframe_to_postgres(
+            persisted,
+            spec.version_table,
+            "append",
+        )
+        actual_count = count_component_rows_spark(
+            spark,
+            candidate,
+            component_name,
+        )
+        if actual_count != expected_count:
+            raise ModelPublicationError(
+                f"{component_name} stored row count {actual_count} does not match "
+                f"persisted row count {expected_count}"
+            )
+        record_component_complete_spark(
+            spark,
+            candidate,
+            component_name,
+            actual_count,
+            source_info,
+        )
+        return actual_count
+    finally:
+        persisted.unpersist()

@@ -8,10 +8,18 @@ SPARK_PACKAGES = (
     'org.apache.hadoop:hadoop-aws:3.3.2,'
     'org.postgresql:postgresql:42.7.3'
 )
-GENERATION_ID_XCOM = "{{ ti.xcom_pull(task_ids='create_generation') }}"
+GENERATION_ID_XCOM = "{{ ti.xcom_pull(task_ids='create_generation') or '' }}"
+AIRFLOW_RUN_ID_TEMPLATE = "{{ run_id }}"
+GENERATION_TASK_ENV = {
+    "MODEL_GENERATION_ID": GENERATION_ID_XCOM,
+}
+FAILURE_TASK_ENV = {
+    "MODEL_GENERATION_ID": GENERATION_ID_XCOM,
+    "MODEL_AIRFLOW_RUN_ID": AIRFLOW_RUN_ID_TEMPLATE,
+}
 V2_DOCKER_ENV = (
     "-e MODEL_PUBLICATION_V2=true "
-    f"-e MODEL_GENERATION_ID='{GENERATION_ID_XCOM}' "
+    '-e MODEL_GENERATION_ID="$MODEL_GENERATION_ID" '
 )
 
 default_args = {
@@ -35,8 +43,10 @@ create_generation_task = BashOperator(
     task_id='create_generation',
     bash_command=(
         "python /opt/airflow/scripts/create_recommendation_generation.py "
-        "--airflow-run-id '{{ run_id }}'"
+        '--airflow-run-id "$MODEL_AIRFLOW_RUN_ID"'
     ),
+    env={"MODEL_AIRFLOW_RUN_ID": AIRFLOW_RUN_ID_TEMPLATE},
+    append_env=True,
     do_xcom_push=True,
     execution_timeout=timedelta(minutes=2),
     dag=dag,
@@ -59,6 +69,8 @@ generate_recommendations_task = BashOperator(
         '/home/jovyan/scripts/generate_cluster_recommendations.py'
     ),
     pool='spark_heavy',
+    env=GENERATION_TASK_ENV,
+    append_env=True,
     execution_timeout=timedelta(minutes=30),
     dag=dag,
 )
@@ -71,6 +83,8 @@ export_als_task = BashOperator(
         '/home/jovyan/scripts/export_als_recommendations.py'
     ),
     pool='spark_heavy',
+    env=GENERATION_TASK_ENV,
+    append_env=True,
     execution_timeout=timedelta(minutes=30),
     dag=dag,
 )
@@ -83,6 +97,8 @@ export_content_based_task = BashOperator(
         '/home/jovyan/scripts/export_content_based.py'
     ),
     pool='spark_heavy',
+    env=GENERATION_TASK_ENV,
+    append_env=True,
     execution_timeout=timedelta(minutes=30),
     dag=dag,
 )
@@ -95,6 +111,8 @@ export_item_based_task = BashOperator(
         '/home/jovyan/scripts/export_item_based.py'
     ),
     pool='spark_heavy',
+    env=GENERATION_TASK_ENV,
+    append_env=True,
     execution_timeout=timedelta(minutes=30),
     dag=dag,
 )
@@ -103,8 +121,11 @@ validate_generation_task = BashOperator(
     task_id='validate_generation',
     bash_command=(
         "python /opt/airflow/scripts/validate_recommendation_generation.py "
-        f"'{GENERATION_ID_XCOM}'"
+        '"$MODEL_GENERATION_ID"'
     ),
+    env=GENERATION_TASK_ENV,
+    append_env=True,
+    trigger_rule=TriggerRule.ALL_SUCCESS,
     execution_timeout=timedelta(minutes=5),
     dag=dag,
 )
@@ -113,9 +134,26 @@ publish_generation_task = BashOperator(
     task_id='publish_generation',
     bash_command=(
         "python /opt/airflow/scripts/publish_recommendation_generation.py "
-        f"'{GENERATION_ID_XCOM}'"
+        '"$MODEL_GENERATION_ID"'
     ),
+    env=GENERATION_TASK_ENV,
+    append_env=True,
     trigger_rule=TriggerRule.ALL_SUCCESS,
+    execution_timeout=timedelta(minutes=5),
+    dag=dag,
+)
+
+failure_finalizer_task = BashOperator(
+    task_id='fail_generation',
+    bash_command=(
+        "python /opt/airflow/scripts/fail_recommendation_generation.py "
+        '--generation-id "$MODEL_GENERATION_ID" '
+        '--airflow-run-id "$MODEL_AIRFLOW_RUN_ID" '
+        "--reason 'Airflow recommendation pipeline task failed'"
+    ),
+    env=FAILURE_TASK_ENV,
+    append_env=True,
+    trigger_rule=TriggerRule.ONE_FAILED,
     execution_timeout=timedelta(minutes=5),
     dag=dag,
 )
@@ -130,3 +168,8 @@ publish_generation_task = BashOperator(
     >> validate_generation_task
     >> publish_generation_task
 )
+
+# The model tasks and validation are a linear chain. ONE_FAILED runs only after
+# validation is terminal; model failures propagate there as UPSTREAM_FAILED,
+# while a successful validation skips this finalizer and remains publishable.
+validate_generation_task >> failure_finalizer_task

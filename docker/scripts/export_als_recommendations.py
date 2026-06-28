@@ -5,35 +5,18 @@ from pyspark.sql import functions as F
 sys.path.append("/home/jovyan/scripts")
 from common_config import get_spark_session
 from model_publication import (
-    prepare_component_retry_spark,
-    record_component_complete_spark,
+    export_versioned_component_spark,
     resolve_export_plan,
+    write_dataframe_to_postgres,
 )
-
-
-POSTGRES_URL = "jdbc:postgresql://postgres:5432/data_lakehouse"
-POSTGRES_PROPERTIES = {
-    "user": "user",
-    "password": "password",
-    "driver": "org.postgresql.Driver",
-}
 
 
 def export_dataframe_to_postgres(
     df,
     table_name: str,
-    jdbc_url: str,
     mode: str = "overwrite",
 ):
-    df.write \
-        .format("jdbc") \
-        .option("url", jdbc_url) \
-        .option("dbtable", table_name) \
-        .option("user", POSTGRES_PROPERTIES["user"]) \
-        .option("password", POSTGRES_PROPERTIES["password"]) \
-        .option("driver", POSTGRES_PROPERTIES["driver"]) \
-        .mode(mode) \
-        .save()
+    write_dataframe_to_postgres(df, table_name, mode)
 
 
 def export_als_recommendations():
@@ -56,7 +39,6 @@ def export_als_recommendations():
         export_dataframe_to_postgres(
             recommendations,
             plan.target_table,
-            POSTGRES_URL,
         )
     else:
         generation_id = plan.generation_id
@@ -66,21 +48,11 @@ def export_als_recommendations():
             "product_id",
             "score",
         )
-        row_count = versioned.count()
-        if row_count <= 0:
-            raise RuntimeError("ALS is a required component and cannot be empty")
-        prepare_component_retry_spark(spark, generation_id, ("als",))
-        export_dataframe_to_postgres(
-            versioned,
-            plan.target_table,
-            POSTGRES_URL,
-            plan.write_mode,
-        )
-        record_component_complete_spark(
+        export_versioned_component_spark(
             spark,
+            versioned,
             generation_id,
             "als",
-            row_count,
             {"source": "gold_db.recommendations_als"},
         )
 
