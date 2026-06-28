@@ -253,6 +253,73 @@ def test_feature_flag_disabled_preserves_legacy_addition() -> None:
     assert reranked[0]["reranked_score"] == 17.5
 
 
+def test_v1_preserves_single_negative_category_match() -> None:
+    items = [{"id": "101", "category": "Laptops", "cluster_total_score": 10.0}]
+
+    reranked = rerank_candidates(
+        items,
+        {"Laptops": -5.0},
+        RecommendationScoringConfig(enabled=False),
+    )
+
+    assert reranked[0]["reranked_score"] == 5.0
+
+
+def test_v1_unmatched_category_main_does_not_neutralize_negative_category() -> None:
+    items = [
+        {
+            "id": "101",
+            "category": "Laptops",
+            "category_main": "Untracked Parent",
+            "cluster_total_score": 10.0,
+        }
+    ]
+
+    reranked = rerank_candidates(
+        items,
+        {"Laptops": -5.0},
+        RecommendationScoringConfig(enabled=False),
+    )
+
+    assert reranked[0]["reranked_score"] == 5.0
+
+
+def test_v1_no_matching_category_has_zero_recent_influence() -> None:
+    items = [{"id": "101", "category": "Phones", "cluster_total_score": 10.0}]
+
+    reranked = rerank_candidates(
+        items,
+        {"Laptops": -5.0},
+        RecommendationScoringConfig(enabled=False),
+    )
+
+    assert reranked[0]["reranked_score"] == 10.0
+
+
+def test_v1_both_category_fields_select_only_the_greater_actual_match() -> None:
+    items = [
+        {
+            "id": "101",
+            "category": "Laptops",
+            "category_main": "Electronics",
+            "cluster_total_score": 10.0,
+        }
+    ]
+    category_scores = {
+        "Laptops": -5.0,
+        "Electronics": -2.0,
+        "Unrelated Positive Category": 100.0,
+    }
+
+    reranked = rerank_candidates(
+        items,
+        category_scores,
+        RecommendationScoringConfig(enabled=False),
+    )
+
+    assert reranked[0]["reranked_score"] == 8.0
+
+
 def test_v1_uses_aggregated_aliases_with_legacy_addition() -> None:
     items = [
         {"id": "101", "category": " HOME-APPLIANCES ", "cluster_total_score": 12.0},
@@ -285,6 +352,19 @@ def test_v2_uses_aggregated_alias_score_before_tanh() -> None:
     reranked = rerank_candidates(items, category_scores, enabled_config())
 
     expected = 0.8 * 0.5 + 0.2 * math.tanh(13.0)
+    assert reranked[0]["reranked_score"] == pytest.approx(expected)
+
+
+def test_v2_uses_negative_matched_score_before_tanh() -> None:
+    items = [{"id": "101", "category": "Laptops", "cluster_total_score": 10.0}]
+
+    reranked = rerank_candidates(
+        items,
+        {"Laptops": -5.0},
+        enabled_config(),
+    )
+
+    expected = 0.8 * 0.5 + 0.2 * math.tanh(-5.0)
     assert reranked[0]["reranked_score"] == pytest.approx(expected)
 
 

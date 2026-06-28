@@ -249,14 +249,15 @@ def aggregate_category_scores(
 
 def _matched_recent_score(
     item: Mapping[str, Any],
-    category_scores: Mapping[str, Any],
+    aggregated_category_scores: Mapping[str, float],
 ) -> float:
-    normalized_scores = aggregate_category_scores(category_scores)
+    matched_scores: list[float] = []
     for field_name in ("category", "category_main"):
         category = normalize_category(item.get(field_name))
-        if category in normalized_scores:
-            return normalized_scores[category]
-    return 0.0
+        if category and category in aggregated_category_scores:
+            matched_scores.append(aggregated_category_scores[category])
+
+    return max(matched_scores) if matched_scores else 0.0
 
 
 def _legacy_rerank_candidates(
@@ -272,11 +273,7 @@ def _legacy_rerank_candidates(
         return items
 
     for item in items:
-        product_category = normalize_category(item.get("category"))
-        product_category_main = normalize_category(item.get("category_main"))
-        category_score = normalized_scores.get(product_category, 0.0)
-        category_main_score = normalized_scores.get(product_category_main, 0.0)
-        matched_score = max(category_score, category_main_score)
+        matched_score = _matched_recent_score(item, normalized_scores)
         base_score = float(item.get("cluster_total_score") or 0.0)
         item["reranked_score"] = base_score + matched_score
 
@@ -296,10 +293,11 @@ def rerank_candidates(
     normalized_base_scores = min_max_normalize(
         [item.get("cluster_total_score") for item in items]
     )
+    normalized_category_scores = aggregate_category_scores(category_scores)
     reranked: list[dict[str, Any]] = []
     for item, normalized_base_score in zip(items, normalized_base_scores, strict=True):
         result = dict(item)
-        recent_score = _matched_recent_score(item, category_scores)
+        recent_score = _matched_recent_score(item, normalized_category_scores)
         recent_signal = bound_recent_signal(recent_score, config.recent_temperature)
         result["reranked_score"] = fuse_scores(
             normalized_base_score,
