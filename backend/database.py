@@ -41,6 +41,17 @@ GLOBAL_TOP_TABLE_CANDIDATES = tuple(
     ).split(",")
     if table.strip()
 )
+RECOMMENDATION_GENERATION_READ_V2 = os.getenv(
+    "RECOMMENDATION_GENERATION_READ_V2",
+    "false",
+).strip().lower() in {"true", "1", "yes", "on"}
+VERSIONED_SERVING_TABLES = {
+    "serving_user_clusters": "serving_user_clusters_versions",
+    "serving_recommendations": "serving_recommendations_versions",
+    "serving_als": "serving_als_versions",
+    "serving_content_based": "serving_content_based_versions",
+    "serving_item_based": "serving_item_based_versions",
+}
 
 
 def quote_identifier(identifier: str) -> str:
@@ -49,6 +60,49 @@ def quote_identifier(identifier: str) -> str:
 
 def table_ref(table_name: str) -> str:
     return f'public.{quote_identifier(table_name)}'
+
+
+def _serving_table_name(legacy_table: str, generation_id: str | None) -> str:
+    if generation_id is None:
+        return legacy_table
+    return VERSIONED_SERVING_TABLES[legacy_table]
+
+
+def _generation_predicate(alias: str, generation_id: str | None) -> str:
+    if generation_id is None:
+        return ""
+    prefix = f"{alias}." if alias else ""
+    return f"AND {prefix}generation_id = :generation_id"
+
+
+def _generation_parameters(
+    parameters: dict[str, Any],
+    generation_id: str | None,
+) -> dict[str, Any]:
+    if generation_id is not None:
+        parameters["generation_id"] = generation_id
+    return parameters
+
+
+def _get_active_generation_id(connection: Connection) -> str:
+    generation_id = connection.execute(
+        text(
+            """
+            SELECT generation_id
+            FROM public.active_recommendation_generation
+            WHERE singleton_key = 1
+            """
+        )
+    ).scalar_one_or_none()
+    if generation_id is None or not str(generation_id).strip():
+        raise RuntimeError("No active recommendation generation is published")
+    return str(generation_id).strip()
+
+
+def _resolve_request_generation(connection: Connection) -> str | None:
+    if not RECOMMENDATION_GENERATION_READ_V2:
+        return None
+    return _get_active_generation_id(connection)
 
 
 def _get_public_table_columns(connection: Connection, table_name: str) -> set[str]:
@@ -168,8 +222,10 @@ def _fetch_user_recommendations_from_als(
     connection: Connection,
     user_id: str,
     limit: int,
+    generation_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    columns = _get_public_table_columns(connection, "serving_als")
+    table_name = _serving_table_name("serving_als", generation_id)
+    columns = _get_public_table_columns(connection, table_name)
     if not columns:
         return []
 
@@ -205,16 +261,23 @@ def _fetch_user_recommendations_from_als(
             {score_expr} AS cluster_total_score,
             {price_expr} AS price,
             {category_expr} AS category_name
-        FROM {table_ref("serving_als")} r
+        FROM {table_ref(table_name)} r
         {product_join}
         WHERE {_qualified_column("r", user_col)}::text = :user_id
+          {_generation_predicate("r", generation_id)}
           AND {product_expr} IS NOT NULL
           AND {score_expr} IS NOT NULL
         ORDER BY {order_clause}
         LIMIT :limit
         """
     )
-    result = connection.execute(query, {"user_id": user_id, "limit": limit}).mappings().all()
+    result = connection.execute(
+        query,
+        _generation_parameters(
+            {"user_id": user_id, "limit": limit},
+            generation_id,
+        ),
+    ).mappings().all()
     return [dict(row) for row in result]
 
 
@@ -222,8 +285,10 @@ def _fetch_user_recommendations_from_content_based(
     connection: Connection,
     user_id: str,
     limit: int,
+    generation_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    columns = _get_public_table_columns(connection, "serving_content_based")
+    table_name = _serving_table_name("serving_content_based", generation_id)
+    columns = _get_public_table_columns(connection, table_name)
     if not columns:
         return []
 
@@ -263,16 +328,23 @@ def _fetch_user_recommendations_from_content_based(
             {score_expr} AS cluster_total_score,
             {price_expr} AS price,
             {category_expr} AS category_name
-        FROM {table_ref("serving_content_based")} r
+        FROM {table_ref(table_name)} r
         {product_join}
         WHERE {_qualified_column("r", user_col)}::text = :user_id
+          {_generation_predicate("r", generation_id)}
           AND {product_expr} IS NOT NULL
           AND {score_expr} IS NOT NULL
         ORDER BY {order_clause}
         LIMIT :limit
         """
     )
-    result = connection.execute(query, {"user_id": user_id, "limit": limit}).mappings().all()
+    result = connection.execute(
+        query,
+        _generation_parameters(
+            {"user_id": user_id, "limit": limit},
+            generation_id,
+        ),
+    ).mappings().all()
     return [dict(row) for row in result]
 
 
@@ -348,7 +420,9 @@ def get_content_based_recommendations(
     limit: int = 4,
 ) -> list[dict[str, Any]]:
     with engine.connect() as connection:
-        columns = _get_public_table_columns(connection, "serving_content_based")
+        generation_id = _resolve_request_generation(connection)
+        table_name = _serving_table_name("serving_content_based", generation_id)
+        columns = _get_public_table_columns(connection, table_name)
         if not columns:
             return _fetch_content_based_dim_product_fallback(connection, product_id, limit)
 
@@ -388,9 +462,10 @@ def get_content_based_recommendations(
                 {score_expr} AS cluster_total_score,
                 {price_expr} AS price,
                 {category_expr} AS category_name
-            FROM {table_ref("serving_content_based")} r
+            FROM {table_ref(table_name)} r
             {product_join}
             WHERE {source_expr}::text = :product_id
+              {_generation_predicate("r", generation_id)}
               AND {product_expr} IS NOT NULL
               AND {score_expr} IS NOT NULL
             ORDER BY {order_clause}
@@ -399,7 +474,10 @@ def get_content_based_recommendations(
         )
         rows = connection.execute(
             query,
-            {"product_id": product_id, "limit": limit},
+            _generation_parameters(
+                {"product_id": product_id, "limit": limit},
+                generation_id,
+            ),
         ).mappings().all()
         products = [_normalize_recommendation_response(dict(row)) for row in rows]
         if not products:
@@ -421,7 +499,9 @@ def get_item_based_recommendations(
         return []
 
     with engine.connect() as connection:
-        columns = _get_public_table_columns(connection, "serving_item_based")
+        generation_id = _resolve_request_generation(connection)
+        table_name = _serving_table_name("serving_item_based", generation_id)
+        columns = _get_public_table_columns(connection, table_name)
         if not columns:
             return []
 
@@ -468,9 +548,10 @@ def get_item_based_recommendations(
                 MAX({score_expr}) AS cluster_total_score,
                 {price_expr} AS price,
                 {category_expr} AS category_name
-            FROM {table_ref("serving_item_based")} r
+            FROM {table_ref(table_name)} r
             {product_join}
             WHERE {source_expr}::text IN :source_product_ids
+              {_generation_predicate("r", generation_id)}
               AND {product_expr} IS NOT NULL
               AND {product_expr}::text NOT IN :excluded_product_ids
               AND {score_expr} IS NOT NULL
@@ -484,11 +565,14 @@ def get_item_based_recommendations(
         )
         rows = connection.execute(
             query,
-            {
-                "source_product_ids": cart_product_ids,
-                "excluded_product_ids": cart_product_ids,
-                "limit": max(1, limit),
-            },
+            _generation_parameters(
+                {
+                    "source_product_ids": cart_product_ids,
+                    "excluded_product_ids": cart_product_ids,
+                    "limit": max(1, limit),
+                },
+                generation_id,
+            ),
         ).mappings().all()
         return [_normalize_recommendation_response(dict(row)) for row in rows]
 
@@ -497,12 +581,19 @@ def _fetch_user_level_recommendations(
     connection: Connection,
     user_id: str,
     limit: int,
+    generation_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    als_recommendations = _fetch_user_recommendations_from_als(connection, user_id, limit)
+    als_recommendations = _fetch_user_recommendations_from_als(
+        connection,
+        user_id,
+        limit,
+        generation_id,
+    )
     content_recommendations = _fetch_user_recommendations_from_content_based(
         connection,
         user_id,
         limit,
+        generation_id,
     )
 
     if SCORING_CONFIG.enabled:
@@ -526,8 +617,13 @@ def _fetch_user_level_recommendations(
     return recommendations[:limit]
 
 
-def _fetch_user_cluster_id(connection: Connection, user_id: str) -> int | None:
-    columns = _get_public_table_columns(connection, "serving_user_clusters")
+def _fetch_user_cluster_id(
+    connection: Connection,
+    user_id: str,
+    generation_id: str | None = None,
+) -> int | None:
+    table_name = _serving_table_name("serving_user_clusters", generation_id)
+    columns = _get_public_table_columns(connection, table_name)
     if not columns:
         return None
 
@@ -540,12 +636,13 @@ def _fetch_user_cluster_id(connection: Connection, user_id: str) -> int | None:
         text(
             f"""
             SELECT {quote_identifier(cluster_col)}
-            FROM {table_ref("serving_user_clusters")}
+            FROM {table_ref(table_name)}
             WHERE {quote_identifier(user_col)}::text = :user_id
+              {_generation_predicate("", generation_id)}
             LIMIT 1
             """
         ),
-        {"user_id": user_id},
+        _generation_parameters({"user_id": user_id}, generation_id),
     ).scalar_one_or_none()
     return int(cluster_id) if cluster_id is not None else None
 
@@ -554,8 +651,10 @@ def _fetch_cluster_recommendations(
     connection: Connection,
     cluster_id: int,
     limit: int,
+    generation_id: str | None = None,
 ) -> list[dict[str, Any]]:
-    columns = _get_public_table_columns(connection, "serving_recommendations")
+    table_name = _serving_table_name("serving_recommendations", generation_id)
+    columns = _get_public_table_columns(connection, table_name)
     if not columns:
         return []
 
@@ -587,16 +686,23 @@ def _fetch_cluster_recommendations(
             {score_expr} AS cluster_total_score,
             {price_expr} AS price,
             {category_expr} AS category_name
-        FROM {table_ref("serving_recommendations")} r
+        FROM {table_ref(table_name)} r
         {product_join}
         WHERE {_qualified_column("r", cluster_col)} = :cluster_id
+          {_generation_predicate("r", generation_id)}
           AND {product_expr} IS NOT NULL
           AND {score_expr} IS NOT NULL
         ORDER BY {score_expr} DESC
         LIMIT :limit
         """
     )
-    result = connection.execute(query, {"cluster_id": cluster_id, "limit": limit}).mappings().all()
+    result = connection.execute(
+        query,
+        _generation_parameters(
+            {"cluster_id": cluster_id, "limit": limit},
+            generation_id,
+        ),
+    ).mappings().all()
     return [_normalize_recommendation(dict(row)) for row in result]
 
 
@@ -656,8 +762,13 @@ def _fetch_global_top_recommendations(connection: Connection, limit: int) -> lis
     return []
 
 
-def _fetch_emergency_recommendations(connection: Connection, limit: int) -> list[dict[str, Any]]:
-    columns = _get_public_table_columns(connection, "serving_recommendations")
+def _fetch_emergency_recommendations(
+    connection: Connection,
+    limit: int,
+    generation_id: str | None = None,
+) -> list[dict[str, Any]]:
+    table_name = _serving_table_name("serving_recommendations", generation_id)
+    columns = _get_public_table_columns(connection, table_name)
     if not columns:
         return []
 
@@ -689,35 +800,69 @@ def _fetch_emergency_recommendations(connection: Connection, limit: int) -> list
             {score_expr} AS cluster_total_score,
             {price_expr} AS price,
             {category_expr} AS category_name
-        FROM {table_ref("serving_recommendations")} r
+        FROM {table_ref(table_name)} r
         {product_join}
         WHERE {product_expr} IS NOT NULL
+          {_generation_predicate("r", generation_id)}
           AND {score_expr} IS NOT NULL
         ORDER BY {score_expr} DESC
         LIMIT :limit
         """
     )
-    rows = connection.execute(query, {"limit": limit}).mappings().all()
+    rows = connection.execute(
+        query,
+        _generation_parameters({"limit": limit}, generation_id),
+    ).mappings().all()
     return [_normalize_recommendation(dict(row)) for row in rows]
 
 
-def get_recommendations_with_fallback(user_id: str, limit: int = MAX_RECOMMENDATIONS) -> list[dict[str, Any]]:
+def _get_recommendations_with_fallback(
+    connection: Connection,
+    user_id: str,
+    limit: int,
+    generation_id: str | None,
+) -> list[dict[str, Any]]:
+    user_level = _fetch_user_level_recommendations(
+        connection,
+        user_id,
+        limit,
+        generation_id,
+    )
+    if user_level:
+        return user_level
+
+    cluster_id = _fetch_user_cluster_id(connection, user_id, generation_id)
+    if cluster_id is not None:
+        cluster_level = _fetch_cluster_recommendations(
+            connection,
+            cluster_id,
+            limit,
+            generation_id,
+        )
+        if cluster_level:
+            return cluster_level
+
+    # Popularity and dim_products are reference/fallback outputs outside the
+    # five-component atomic model publication boundary.
+    global_top = _fetch_global_top_recommendations(connection, limit)
+    if global_top:
+        return global_top
+
+    return _fetch_emergency_recommendations(connection, limit, generation_id)
+
+
+def get_recommendations_with_fallback(
+    user_id: str,
+    limit: int = MAX_RECOMMENDATIONS,
+) -> list[dict[str, Any]]:
     with engine.connect() as connection:
-        user_level = _fetch_user_level_recommendations(connection, user_id, limit)
-        if user_level:
-            return user_level
-
-        cluster_id = _fetch_user_cluster_id(connection, user_id)
-        if cluster_id is not None:
-            cluster_level = _fetch_cluster_recommendations(connection, cluster_id, limit)
-            if cluster_level:
-                return cluster_level
-
-        global_top = _fetch_global_top_recommendations(connection, limit)
-        if global_top:
-            return global_top
-
-        return _fetch_emergency_recommendations(connection, limit)
+        generation_id = _resolve_request_generation(connection)
+        return _get_recommendations_with_fallback(
+            connection,
+            user_id,
+            limit,
+            generation_id,
+        )
 
 
 def get_recommendations_by_strategy(
@@ -729,25 +874,46 @@ def get_recommendations_by_strategy(
     products: list[dict[str, Any]] = []
 
     with engine.connect() as connection:
+        generation_id = _resolve_request_generation(connection)
         if strategy_key == "als":
             products = [
                 _normalize_recommendation(row)
-                for row in _fetch_user_recommendations_from_als(connection, user_id, limit)
+                for row in _fetch_user_recommendations_from_als(
+                    connection,
+                    user_id,
+                    limit,
+                    generation_id,
+                )
             ]
         elif strategy_key == "content_based":
             products = [
                 _normalize_recommendation(row)
-                for row in _fetch_user_recommendations_from_content_based(connection, user_id, limit)
+                for row in _fetch_user_recommendations_from_content_based(
+                    connection,
+                    user_id,
+                    limit,
+                    generation_id,
+                )
             ]
         elif strategy_key in {"cluster", "kmeans"}:
-            cluster_id = _fetch_user_cluster_id(connection, user_id)
+            cluster_id = _fetch_user_cluster_id(connection, user_id, generation_id)
             if cluster_id is not None:
-                products = _fetch_cluster_recommendations(connection, cluster_id, limit)
+                products = _fetch_cluster_recommendations(
+                    connection,
+                    cluster_id,
+                    limit,
+                    generation_id,
+                )
 
-    if products:
-        return products
+        if products:
+            return products
 
-    return get_recommendations_with_fallback(user_id, limit)
+        return _get_recommendations_with_fallback(
+            connection,
+            user_id,
+            limit,
+            generation_id,
+        )
 
 
 def get_recommendations_from_db(user_id: str) -> list[dict[str, Any]]:
