@@ -43,6 +43,9 @@ from schemas import (
 
 logger = logging.getLogger(__name__)
 
+HOME_RECOMMENDATION_RETURN_LIMIT = 10
+HOME_RECOMMENDATION_CANDIDATE_LIMIT = 50
+
 
 def warmup_database_caches():
     logger.info("Starting database cache warmup...")
@@ -256,7 +259,13 @@ def get_home_recommendations(
         products = list(get_global_recommendations())
     else:
         # Gọi tên hàm lấy dữ liệu cá nhân hóa
-        products = list(get_recommendations_by_strategy(user_id, strategy))
+        products = list(
+            get_recommendations_by_strategy(
+                user_id,
+                strategy,
+                limit=HOME_RECOMMENDATION_CANDIDATE_LIMIT,
+            )
+        )
 
     category_scores = get_category_scores(user_id)
 
@@ -269,7 +278,18 @@ def get_home_recommendations(
 
     unique_products = list(unique_products_by_id.values())
     products = apply_category_reranking(unique_products, category_scores)
-    return products
+    returned_products = products[:HOME_RECOMMENDATION_RETURN_LIMIT]
+    logger.debug(
+        "Home recommendation rerank: user_id=%s strategy=%s "
+        "candidate_count_before_rerank=%s returned_count=%s "
+        "redis_category_score_keys=%s",
+        user_id,
+        strategy,
+        len(unique_products),
+        len(returned_products),
+        sorted(category_scores),
+    )
+    return returned_products
 
 
 @app.get("/api/recommend/product/{product_id}")
