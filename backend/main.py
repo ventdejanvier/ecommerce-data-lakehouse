@@ -46,9 +46,10 @@ logger = logging.getLogger(__name__)
 
 HOME_RECOMMENDATION_RETURN_LIMIT = 10
 HOME_RECOMMENDATION_CANDIDATE_LIMIT = 50
-RECENT_CATEGORY_MAX_CATEGORIES = 3
-RECENT_CATEGORY_CANDIDATES_PER_CATEGORY = 12
-RECENT_CATEGORY_TOTAL_CANDIDATE_LIMIT = 36
+HOME_RECOMMENDATION_MAX_RECENT_CATEGORY_ITEMS = 4
+RECENT_CATEGORY_MAX_CATEGORIES = 2
+RECENT_CATEGORY_CANDIDATES_PER_CATEGORY = 6
+RECENT_CATEGORY_TOTAL_CANDIDATE_LIMIT = 12
 
 
 def warmup_database_caches():
@@ -248,6 +249,49 @@ def rerank_by_recent_categories(
     return apply_category_reranking(products, category_scores)
 
 
+def select_home_recommendation_mix(
+    reranked_products: list[dict[str, Any]],
+    return_limit: int = HOME_RECOMMENDATION_RETURN_LIMIT,
+    max_recent_category_items: int = HOME_RECOMMENDATION_MAX_RECENT_CATEGORY_ITEMS,
+) -> list[dict[str, Any]]:
+    """Cap injected candidates while preserving stable reranked order."""
+    if return_limit <= 0:
+        return []
+
+    recent_limit = max(0, max_recent_category_items)
+    selected: list[dict[str, Any]] = []
+    skipped_recent: list[dict[str, Any]] = []
+    seen_product_ids: set[str] = set()
+    recent_count = 0
+
+    for product in reranked_products:
+        product_id = product.get("id") or product.get("product_id")
+        if product_id is None:
+            continue
+        product_key = str(product_id)
+        if product_key in seen_product_ids:
+            continue
+        seen_product_ids.add(product_key)
+
+        is_recent_candidate = product.get("candidate_source") == "recent_category"
+        if is_recent_candidate and recent_count >= recent_limit:
+            skipped_recent.append(product)
+            continue
+
+        selected.append(product)
+        if is_recent_candidate:
+            recent_count += 1
+        if len(selected) >= return_limit:
+            return selected
+
+    for product in skipped_recent:
+        selected.append(product)
+        if len(selected) >= return_limit:
+            break
+
+    return selected
+
+
 @app.post("/api/track")
 def track_event(data: dict[str, Any], background_tasks: BackgroundTasks) -> dict[str, str]:
     # Đẩy tác vụ gửi vào Kafka ra background để API phản hồi ngay.
@@ -315,7 +359,16 @@ def get_home_recommendations(
 
     unique_products = list(unique_products_by_id.values())
     products = apply_category_reranking(unique_products, category_scores)
-    returned_products = products[:HOME_RECOMMENDATION_RETURN_LIMIT]
+    returned_products = select_home_recommendation_mix(
+        products,
+        return_limit=HOME_RECOMMENDATION_RETURN_LIMIT,
+        max_recent_category_items=HOME_RECOMMENDATION_MAX_RECENT_CATEGORY_ITEMS,
+    )
+    recent_category_items_returned = sum(
+        product.get("candidate_source") == "recent_category"
+        for product in returned_products
+    )
+    model_items_returned = len(returned_products) - recent_category_items_returned
     top_returned_categories = [
         product.get("category")
         or product.get("category_main")
@@ -330,7 +383,8 @@ def get_home_recommendations(
         "Home recommendation rerank user_id=%s is_ml_enabled=%s strategy=%s "
         "model_candidate_count=%s redis_category_scores=%s "
         "recent_category_candidate_count=%s merged_candidate_count=%s "
-        "returned_count=%s top_returned_categories=%s top_returned_ids=%s",
+        "returned_count=%s recent_category_items_returned=%s "
+        "model_items_returned=%s top_returned_categories=%s top_returned_ids=%s",
         user_id,
         is_ml_enabled,
         strategy,
@@ -339,6 +393,8 @@ def get_home_recommendations(
         len(recent_category_candidates),
         len(unique_products),
         len(returned_products),
+        recent_category_items_returned,
+        model_items_returned,
         top_returned_categories,
         top_returned_ids,
     )

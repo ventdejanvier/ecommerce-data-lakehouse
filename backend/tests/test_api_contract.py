@@ -74,7 +74,7 @@ def test_home_recommendations_expand_deduplicate_and_limit(monkeypatch) -> None:
             "name": f"Model {product_id}",
             "price": 100.0,
             "category": "Computers",
-            "cluster_total_score": float(1000 - product_id),
+            "cluster_total_score": float((12 - product_id) * 10),
         }
         for product_id in range(1, 12)
     ]
@@ -114,9 +114,83 @@ def test_home_recommendations_expand_deduplicate_and_limit(monkeypatch) -> None:
     data = response.json()
     assert len(data) == 10
     assert len({item["id"] for item in data}) == 10
-    assert any(item["category"] == "Accessories" for item in data[:3])
+    assert sum(item.get("candidate_source") == "recent_category" for item in data) == 4
+    assert sum(item.get("candidate_source") != "recent_category" for item in data) == 6
+    assert any(item["category"] == "Accessories" for item in data)
+    assert all("reranked_score" in item for item in data)
     assert any(item["id"] == "1" for item in data)
-    assert expansion_calls == [({"accessories": 5.0}, 3, 12)]
+    assert expansion_calls == [({"accessories": 5.0}, 2, 6)]
+
+
+def test_home_mix_caps_recent_candidates_when_models_are_available() -> None:
+    recent = [
+        {
+            "id": f"recent-{index}",
+            "candidate_source": "recent_category",
+            "reranked_score": 1.0 - index / 100,
+        }
+        for index in range(10)
+    ]
+    models = [
+        {"id": f"model-{index}", "reranked_score": 0.5 - index / 100}
+        for index in range(10)
+    ]
+
+    selected = main.select_home_recommendation_mix([*recent, *models])
+
+    assert len(selected) == 10
+    assert [item["id"] for item in selected[:4]] == [
+        "recent-0",
+        "recent-1",
+        "recent-2",
+        "recent-3",
+    ]
+    assert sum(item.get("candidate_source") == "recent_category" for item in selected) == 4
+    assert [item["id"] for item in selected[4:]] == [
+        f"model-{index}" for index in range(6)
+    ]
+    assert all("reranked_score" in item for item in selected)
+
+
+def test_home_mix_backfills_recent_candidates_when_models_are_insufficient() -> None:
+    recent = [
+        {
+            "id": f"recent-{index}",
+            "candidate_source": "recent_category",
+            "reranked_score": 1.0 - index / 100,
+        }
+        for index in range(8)
+    ]
+    models = [
+        {"id": f"model-{index}", "reranked_score": 0.5 - index / 100}
+        for index in range(2)
+    ]
+
+    selected = main.select_home_recommendation_mix([*recent, *models])
+
+    assert len(selected) == 10
+    assert sum(item.get("candidate_source") == "recent_category" for item in selected) == 8
+    assert [item["id"] for item in selected[4:6]] == ["model-0", "model-1"]
+    assert [item["id"] for item in selected[6:]] == [
+        "recent-4",
+        "recent-5",
+        "recent-6",
+        "recent-7",
+    ]
+
+
+def test_home_mix_deduplicates_and_respects_short_limit() -> None:
+    products = [
+        {"id": "1", "reranked_score": 1.0},
+        {"product_id": "1", "reranked_score": 0.9},
+        {"id": "2", "reranked_score": 0.8},
+        {"id": "3", "reranked_score": 0.7},
+    ]
+
+    selected = main.select_home_recommendation_mix(products, return_limit=2)
+
+    assert [item.get("id") or item.get("product_id") for item in selected] == ["1", "2"]
+    assert len(selected) <= 2
 
 
 def test_home_recommendations_skip_expansion_without_redis_scores(monkeypatch) -> None:

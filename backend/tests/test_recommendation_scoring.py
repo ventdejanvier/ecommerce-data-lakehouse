@@ -384,12 +384,17 @@ def test_feature_flag_enabled_uses_v2_without_exposing_debug_fields() -> None:
     }
 
 
-def test_home_rerank_promotes_injected_recent_category_candidate() -> None:
+def test_home_rerank_keeps_top_model_and_promotes_recent_over_low_base() -> None:
     items = [
         {
-            "id": "model",
+            "id": "top-model",
             "category": "Computers",
             "cluster_total_score": 5000.0,
+        },
+        {
+            "id": "low-model",
+            "category": "Computers",
+            "cluster_total_score": 100.0,
         },
         {
             "id": "recent",
@@ -405,10 +410,15 @@ def test_home_rerank_promotes_injected_recent_category_candidate() -> None:
         {"Accessories": 5.0},
     )
 
-    assert [item["id"] for item in reranked] == ["recent", "model"]
+    assert [item["id"] for item in reranked] == [
+        "top-model",
+        "recent",
+        "low-model",
+    ]
     assert reranked[0]["reranked_score"] == pytest.approx(0.65)
-    assert reranked[0]["cluster_total_score"] == 0.0
-    assert reranked[1]["cluster_total_score"] == 5000.0
+    assert reranked[1]["reranked_score"] == pytest.approx(0.38)
+    assert reranked[1]["cluster_total_score"] == 0.0
+    assert reranked[0]["cluster_total_score"] == 5000.0
 
 
 def test_home_rerank_matches_all_category_fields_and_normalized_aliases() -> None:

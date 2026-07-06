@@ -226,5 +226,5 @@ def test_home_recent_reranking_prioritizes_recent_intent_over_base_scale(
     response = main.get_home_recommendations("USER_001", is_ml_enabled=False)
 
     assert [item["id"] for item in response] == ["low-base", "high-base"]
-    assert response[0]["reranked_score"] == pytest.approx(0.55)
-    assert response[1]["reranked_score"] == pytest.approx(-0.1)
+    assert response[0]["reranked_score"] == pytest.approx(0.35)
+    assert response[1]["reranked_score"] == pytest.approx(0.3)

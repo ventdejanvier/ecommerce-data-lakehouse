@@ -328,9 +328,9 @@ def rerank_home_candidates_with_recent_categories(
     items: list[dict[str, Any]],
     category_scores: Mapping[str, Any],
     *,
-    base_weight: float = 0.45,
-    recent_weight: float = 0.55,
-    injected_candidate_boost: float = 0.10,
+    base_weight: float = 0.65,
+    recent_weight: float = 0.35,
+    injected_candidate_boost: float = 0.03,
     fallback_config: "RecommendationScoringConfig" | None = None,
 ) -> list[dict[str, Any]]:
     """Rerank the expanded home pool while preserving raw model scores.
