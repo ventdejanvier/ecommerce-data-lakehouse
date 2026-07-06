@@ -10,6 +10,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from recommendation_scoring import (  # noqa: E402
+    SCORING_CONFIG,
     RecommendationScoringConfig,
     aggregate_category_scores,
     blend_model_candidates,
@@ -21,6 +22,7 @@ from recommendation_scoring import (  # noqa: E402
     normalize_weights,
     purchase_completed_category_updates,
     rerank_candidates,
+    rerank_home_candidates_with_recent_categories,
     resolve_recent_event_weight,
 )
 
@@ -380,6 +382,73 @@ def test_feature_flag_enabled_uses_v2_without_exposing_debug_fields() -> None:
         "cluster_total_score",
         "reranked_score",
     }
+
+
+def test_home_rerank_promotes_injected_recent_category_candidate() -> None:
+    items = [
+        {
+            "id": "model",
+            "category": "Computers",
+            "cluster_total_score": 5000.0,
+        },
+        {
+            "id": "recent",
+            "category_main": "Accessories",
+            "cluster_total_score": 0.0,
+            "candidate_source": "recent_category",
+            "recent_match_category": "accessories",
+        },
+    ]
+
+    reranked = rerank_home_candidates_with_recent_categories(
+        items,
+        {"Accessories": 5.0},
+    )
+
+    assert [item["id"] for item in reranked] == ["recent", "model"]
+    assert reranked[0]["reranked_score"] == pytest.approx(0.65)
+    assert reranked[0]["cluster_total_score"] == 0.0
+    assert reranked[1]["cluster_total_score"] == 5000.0
+
+
+def test_home_rerank_matches_all_category_fields_and_normalized_aliases() -> None:
+    items = [
+        {
+            "id": "detail-match",
+            "category": "Electronics",
+            "category_detail": "Country-Yard",
+            "cluster_total_score": 1.0,
+        },
+        {
+            "id": "unmatched",
+            "category": "Electronics",
+            "cluster_total_score": 1.0,
+        },
+    ]
+
+    reranked = rerank_home_candidates_with_recent_categories(
+        items,
+        {"country_yard": 3.0},
+    )
+
+    assert [item["id"] for item in reranked] == ["detail-match", "unmatched"]
+    assert reranked[0]["reranked_score"] > reranked[1]["reranked_score"]
+
+
+def test_home_rerank_without_redis_scores_preserves_existing_scoring() -> None:
+    items = [
+        {"id": "1", "category": "Laptops", "cluster_total_score": 2.0},
+        {"id": "2", "category": "Phones", "cluster_total_score": 1.0},
+    ]
+
+    expected = rerank_candidates(
+        [dict(item) for item in items],
+        {},
+        SCORING_CONFIG,
+    )
+    actual = rerank_home_candidates_with_recent_categories(items, {})
+
+    assert actual == expected
 
 
 def test_event_semantics_cover_cart_remove_and_legacy_events() -> None:

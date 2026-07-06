@@ -22,6 +22,7 @@ from database import (
     get_dim_product_price_expr,
     get_item_based_recommendations,
     get_products_from_db,
+    get_recent_category_candidates,
     get_recommendations_by_strategy,
     get_recommendations_with_fallback,
 )
@@ -30,7 +31,7 @@ from recommendation_scoring import (
     SCORING_CONFIG,
     normalize_category,
     purchase_completed_category_updates,
-    rerank_candidates,
+    rerank_home_candidates_with_recent_categories,
     resolve_recent_event_weight,
 )
 from redis_client import increment_category_score, get_category_scores
@@ -45,6 +46,9 @@ logger = logging.getLogger(__name__)
 
 HOME_RECOMMENDATION_RETURN_LIMIT = 10
 HOME_RECOMMENDATION_CANDIDATE_LIMIT = 50
+RECENT_CATEGORY_MAX_CATEGORIES = 3
+RECENT_CATEGORY_CANDIDATES_PER_CATEGORY = 12
+RECENT_CATEGORY_TOTAL_CANDIDATE_LIMIT = 36
 
 
 def warmup_database_caches():
@@ -230,7 +234,11 @@ def apply_category_reranking(
     items: list[dict[str, Any]],
     category_scores: dict[str, float],
 ) -> list[dict[str, Any]]:
-    return rerank_candidates(items, category_scores, SCORING_CONFIG)
+    return rerank_home_candidates_with_recent_categories(
+        items,
+        category_scores,
+        fallback_config=SCORING_CONFIG,
+    )
 
 
 def rerank_by_recent_categories(
@@ -267,27 +275,72 @@ def get_home_recommendations(
             )
         )
 
+    model_candidate_count = len(products)
     category_scores = get_category_scores(user_id)
+    recent_category_candidates: list[dict[str, Any]] = []
+    if category_scores:
+        try:
+            recent_category_candidates = get_recent_category_candidates(
+                category_scores,
+                max_categories=RECENT_CATEGORY_MAX_CATEGORIES,
+                limit_per_category=RECENT_CATEGORY_CANDIDATES_PER_CATEGORY,
+            )[:RECENT_CATEGORY_TOTAL_CANDIDATE_LIMIT]
+        except Exception as exc:
+            logger.warning(
+                "Recent-category candidate expansion failed: user_id=%s error=%s",
+                user_id,
+                exc,
+            )
 
     unique_products_by_id: dict[str, dict[str, Any]] = {}
-    for product in products:
+    for product in [*products, *recent_category_candidates]:
         product_id = product.get("id") or product.get("product_id")
         if product_id is None:
             continue
-        unique_products_by_id.setdefault(str(product_id), product)
+        product_key = str(product_id)
+        existing = unique_products_by_id.get(product_key)
+        if existing is None:
+            unique_products_by_id[product_key] = dict(product)
+            continue
+        for field_name in (
+            "category",
+            "category_main",
+            "category_sub",
+            "category_detail",
+            "category_name",
+            "recent_match_category",
+        ):
+            if not existing.get(field_name) and product.get(field_name):
+                existing[field_name] = product[field_name]
 
     unique_products = list(unique_products_by_id.values())
     products = apply_category_reranking(unique_products, category_scores)
     returned_products = products[:HOME_RECOMMENDATION_RETURN_LIMIT]
-    logger.debug(
-        "Home recommendation rerank: user_id=%s strategy=%s "
-        "candidate_count_before_rerank=%s returned_count=%s "
-        "redis_category_score_keys=%s",
+    top_returned_categories = [
+        product.get("category")
+        or product.get("category_main")
+        or product.get("recent_match_category")
+        for product in returned_products
+    ]
+    top_returned_ids = [
+        product.get("id") or product.get("product_id")
+        for product in returned_products
+    ]
+    logger.info(
+        "Home recommendation rerank user_id=%s is_ml_enabled=%s strategy=%s "
+        "model_candidate_count=%s redis_category_scores=%s "
+        "recent_category_candidate_count=%s merged_candidate_count=%s "
+        "returned_count=%s top_returned_categories=%s top_returned_ids=%s",
         user_id,
+        is_ml_enabled,
         strategy,
+        model_candidate_count,
+        category_scores,
+        len(recent_category_candidates),
         len(unique_products),
         len(returned_products),
-        sorted(category_scores),
+        top_returned_categories,
+        top_returned_ids,
     )
     return returned_products
 

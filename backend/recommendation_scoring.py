@@ -32,6 +32,14 @@ PURCHASE_ITEM_CATEGORY_FIELDS = (
     "product_category",
     "categoryName",
 )
+HOME_CANDIDATE_CATEGORY_FIELDS = (
+    "category",
+    "category_main",
+    "category_sub",
+    "category_detail",
+    "category_name",
+    "recent_match_category",
+)
 
 
 def finite_float(value: Any) -> float | None:
@@ -314,6 +322,82 @@ def rerank_candidates(
         )
     )
     return reranked
+
+
+def rerank_home_candidates_with_recent_categories(
+    items: list[dict[str, Any]],
+    category_scores: Mapping[str, Any],
+    *,
+    base_weight: float = 0.45,
+    recent_weight: float = 0.55,
+    injected_candidate_boost: float = 0.10,
+    fallback_config: "RecommendationScoringConfig" | None = None,
+) -> list[dict[str, Any]]:
+    """Rerank the expanded home pool while preserving raw model scores.
+
+    The existing scorer remains authoritative when there is no usable Redis
+    signal. With recent intent, model and Redis scores are normalized onto
+    comparable scales so a model score in the thousands cannot hide a recent
+    category match.
+    """
+    normalized_category_scores = aggregate_category_scores(category_scores)
+    copied_items = [dict(item) for item in items]
+    if not normalized_category_scores:
+        return rerank_candidates(
+            copied_items,
+            category_scores,
+            fallback_config or SCORING_CONFIG,
+        )
+
+    normalized_base_weight, normalized_recent_weight = normalize_weights(
+        base_weight,
+        recent_weight,
+    )
+    parsed_base_scores = [
+        finite_float(item.get("cluster_total_score")) or 0.0
+        for item in copied_items
+    ]
+    max_base_score = max([0.0, *parsed_base_scores])
+    max_recent_score = max([0.0, *normalized_category_scores.values()])
+
+    ranked_with_positions: list[tuple[dict[str, Any], int]] = []
+    for original_position, (item, base_score) in enumerate(
+        zip(copied_items, parsed_base_scores, strict=True)
+    ):
+        matched_scores = [
+            normalized_category_scores[category]
+            for field_name in HOME_CANDIDATE_CATEGORY_FIELDS
+            if (category := normalize_category(item.get(field_name)))
+            in normalized_category_scores
+        ]
+        matched_recent_score = max(matched_scores) if matched_scores else 0.0
+        base_norm = base_score / max_base_score if max_base_score > 0.0 else 0.0
+        recent_norm = (
+            matched_recent_score / max_recent_score
+            if max_recent_score > 0.0
+            else 0.0
+        )
+        reranked_score = (
+            normalized_base_weight * base_norm
+            + normalized_recent_weight * recent_norm
+        )
+        if (
+            matched_recent_score > 0.0
+            and item.get("candidate_source") == "recent_category"
+        ):
+            reranked_score += injected_candidate_boost
+
+        item["reranked_score"] = reranked_score
+        ranked_with_positions.append((item, original_position))
+
+    ranked_with_positions.sort(
+        key=lambda entry: (
+            -float(entry[0]["reranked_score"]),
+            entry[1],
+            stable_product_id(entry[0]),
+        )
+    )
+    return [item for item, _ in ranked_with_positions]
 
 
 def resolve_recent_event_weight(event_type: Any, action: Any = None) -> float | None:

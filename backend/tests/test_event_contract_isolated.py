@@ -169,7 +169,9 @@ def test_track_handler_reaches_kafka_when_redis_fails(monkeypatch) -> None:
     assert produced_events == [("ecommerce-raw-events", payload)]
 
 
-def test_v1_home_response_is_unchanged_when_flag_is_disabled(monkeypatch) -> None:
+def test_home_recent_rerank_uses_normalized_scores_when_v2_flag_is_disabled(
+    monkeypatch,
+) -> None:
     products = [
         {
             "id": "101",
@@ -181,6 +183,7 @@ def test_v1_home_response_is_unchanged_when_flag_is_disabled(monkeypatch) -> Non
     monkeypatch.setattr(main, "SCORING_CONFIG", RecommendationScoringConfig(enabled=False))
     monkeypatch.setattr(main, "get_global_recommendations", lambda: products)
     monkeypatch.setattr(main, "get_category_scores", lambda user_id: {"Laptops": 5.0})
+    monkeypatch.setattr(main, "get_recent_category_candidates", lambda *args, **kwargs: [])
 
     response = main.get_home_recommendations("USER_001", is_ml_enabled=False)
 
@@ -190,12 +193,14 @@ def test_v1_home_response_is_unchanged_when_flag_is_disabled(monkeypatch) -> Non
             "name": "Demo Product",
             "category": "Laptops",
             "cluster_total_score": 12.5,
-            "reranked_score": 17.5,
+            "reranked_score": 1.0,
         }
     ]
 
 
-def test_v2_home_reranking_uses_injected_config(monkeypatch) -> None:
+def test_home_recent_reranking_prioritizes_recent_intent_over_base_scale(
+    monkeypatch,
+) -> None:
     products = [
         {"id": "high-base", "category": "Penalty", "cluster_total_score": 100.0},
         {"id": "low-base", "category": "Boost", "cluster_total_score": 0.0},
@@ -216,9 +221,10 @@ def test_v2_home_reranking_uses_injected_config(monkeypatch) -> None:
         "get_category_scores",
         lambda user_id: {"Penalty": -1e100, "Boost": 1e100},
     )
+    monkeypatch.setattr(main, "get_recent_category_candidates", lambda *args, **kwargs: [])
 
     response = main.get_home_recommendations("USER_001", is_ml_enabled=False)
 
-    assert [item["id"] for item in response] == ["high-base", "low-base"]
-    assert response[0]["reranked_score"] == pytest.approx(0.6)
-    assert response[1]["reranked_score"] == pytest.approx(0.2)
+    assert [item["id"] for item in response] == ["low-base", "high-base"]
+    assert response[0]["reranked_score"] == pytest.approx(0.55)
+    assert response[1]["reranked_score"] == pytest.approx(-0.1)

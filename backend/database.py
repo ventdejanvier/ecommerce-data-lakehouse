@@ -6,7 +6,11 @@ from typing import Any
 from sqlalchemy import bindparam, create_engine, text
 from sqlalchemy.engine import Connection
 
-from recommendation_scoring import SCORING_CONFIG, blend_model_candidates
+from recommendation_scoring import (
+    SCORING_CONFIG,
+    aggregate_category_scores,
+    blend_model_candidates,
+)
 
 DATABASE_URL = os.getenv(
     "DATABASE_URL",
@@ -27,6 +31,18 @@ PRODUCT_ID_COLUMNS = ("product_id",)
 PRODUCT_NAME_COLUMNS = ("display_name", "product_name", "name")
 PRODUCT_PRICE_COLUMNS = ("avg_price", "price")
 PRODUCT_CATEGORY_COLUMNS = ("category_main", "category_fixed", "category")
+DIM_PRODUCT_CATEGORY_COLUMNS = (
+    "category_main",
+    "category_sub",
+    "category_detail",
+    "category_name",
+    "category",
+    "category_fixed",
+    "subcategory",
+    "category_level_2",
+    "category_level_3",
+    "category_leaf",
+)
 GLOBAL_TOP_TABLE_CANDIDATES = tuple(
     table.strip()
     for table in os.getenv(
@@ -86,6 +102,136 @@ def get_dim_product_price_expr(
 
     price_expr = _qualified_column(alias, price_col) if alias else quote_identifier(price_col)
     return f"COALESCE({price_expr}, 0.0)" if coalesce else price_expr
+
+
+def _normalized_category_sql(expression: str) -> str:
+    return (
+        "LOWER(REGEXP_REPLACE("
+        f"REPLACE(REPLACE(BTRIM(COALESCE({expression}::text, '')), '_', ' '), '-', ' '), "
+        "'[[:space:]]+', ' ', 'g'))"
+    )
+
+
+def get_recent_category_candidates(
+    category_scores: dict[str, float],
+    max_categories: int = 3,
+    limit_per_category: int = 12,
+) -> list[dict[str, Any]]:
+    """Read stable product candidates matching the strongest recent categories."""
+    if max_categories <= 0 or limit_per_category <= 0:
+        return []
+
+    normalized_scores = aggregate_category_scores(category_scores)
+    top_categories = sorted(
+        normalized_scores.items(),
+        key=lambda entry: (-entry[1], entry[0]),
+    )[:max_categories]
+    if not top_categories:
+        return []
+
+    candidates: list[dict[str, Any]] = []
+    with engine.connect() as connection:
+        columns = _get_public_table_columns(connection, "dim_products")
+        product_id_col = _resolve_column(columns, PRODUCT_ID_COLUMNS)
+        name_col = _resolve_column(columns, PRODUCT_NAME_COLUMNS)
+        category_columns = [
+            column for column in DIM_PRODUCT_CATEGORY_COLUMNS if column in columns
+        ]
+        if not product_id_col or not category_columns:
+            return []
+
+        main_col = _resolve_column(columns, PRODUCT_CATEGORY_COLUMNS)
+        sub_col = _resolve_column(
+            columns,
+            ("category_sub", "subcategory", "category_level_2"),
+        )
+        detail_col = _resolve_column(
+            columns,
+            ("category_detail", "category_level_3", "category_leaf"),
+        )
+        category_name_col = _resolve_column(columns, ("category_name",))
+        category_col = _resolve_column(columns, ("category",))
+
+        product_expr = _qualified_column("p", product_id_col)
+        name_expr = _qualified_column("p", name_col) if name_col else "NULL"
+        display_expr = f"COALESCE({name_expr}, 'Product ' || {product_expr}::text)"
+        price_expr = get_dim_product_price_expr(connection, alias="p", coalesce=True)
+
+        def selected_column(column: str | None) -> str:
+            return _qualified_column("p", column) if column else "NULL"
+
+        match_clause = " OR ".join(
+            f"{_normalized_category_sql(_qualified_column('p', column))} = :recent_category"
+            for column in category_columns
+        )
+        query = text(
+            f"""
+            SELECT
+                {product_expr} AS product_id,
+                {display_expr} AS display_name,
+                {price_expr} AS price,
+                {selected_column(main_col)} AS category_main,
+                {selected_column(sub_col)} AS category_sub,
+                {selected_column(detail_col)} AS category_detail,
+                {selected_column(category_name_col)} AS category_name,
+                {selected_column(category_col)} AS category
+            FROM {table_ref("dim_products")} p
+            WHERE {product_expr} IS NOT NULL
+              AND ({match_clause})
+            ORDER BY {product_expr} ASC
+            LIMIT :limit
+            """
+        )
+
+        for recent_category, _ in top_categories:
+            rows = connection.execute(
+                query,
+                {
+                    "recent_category": recent_category,
+                    "limit": limit_per_category,
+                },
+            ).mappings().all()
+            for row in rows:
+                item = dict(row)
+                product_id = item.get("product_id")
+                price = item.get("price", 0.0)
+                if isinstance(price, Decimal):
+                    price = float(price)
+                category_label = next(
+                    (
+                        item.get(field_name)
+                        for field_name in (
+                            "category_main",
+                            "category_sub",
+                            "category_detail",
+                            "category_name",
+                            "category",
+                        )
+                        if item.get(field_name)
+                    ),
+                    recent_category,
+                )
+                candidates.append(
+                    {
+                        "id": str(product_id),
+                        "product_id": product_id,
+                        "name": str(item.get("display_name") or f"Product {product_id}"),
+                        "display_name": str(
+                            item.get("display_name") or f"Product {product_id}"
+                        ),
+                        "price": float(price or 0.0),
+                        "category": str(category_label),
+                        "category_main": item.get("category_main"),
+                        "category_sub": item.get("category_sub"),
+                        "category_detail": item.get("category_detail"),
+                        "category_name": item.get("category_name"),
+                        "cluster_total_score": 0.0,
+                        "candidate_source": "recent_category",
+                        "recent_match_category": recent_category,
+                    }
+                )
+
+    return candidates
 
 
 def _get_dim_product_lookup_sql(
