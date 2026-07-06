@@ -49,11 +49,11 @@ class FakeConnection:
             "accessories": [
                 {
                     "product_id": 10,
-                    "display_name": "USB Cable",
+                    "display_name": "Auto Accessories GPS",
                     "price": Decimal("9.99"),
-                    "category_main": "Electronics",
+                    "category_main": "Auto",
                     "category_sub": "Accessories",
-                    "category_detail": None,
+                    "category_detail": "Gps",
                     "category_name": None,
                     "category": None,
                 }
@@ -108,7 +108,10 @@ def test_recent_category_candidates_are_schema_aware_and_stably_ordered(monkeypa
     assert [candidate["id"] for candidate in candidates] == ["20", "10"]
     assert candidates[0]["price"] == 49.99
     assert candidates[0]["recent_match_category"] == "home appliances"
+    assert candidates[1]["category"] == "Accessories"
+    assert candidates[1]["category_main"] == "Auto"
     assert candidates[1]["category_sub"] == "Accessories"
+    assert candidates[1]["category_detail"] == "Gps"
     assert all(
         candidate["candidate_source"] == "recent_category"
         and candidate["cluster_total_score"] == 0.0

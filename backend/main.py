@@ -47,6 +47,7 @@ logger = logging.getLogger(__name__)
 HOME_RECOMMENDATION_RETURN_LIMIT = 10
 HOME_RECOMMENDATION_CANDIDATE_LIMIT = 50
 HOME_RECOMMENDATION_MAX_RECENT_CATEGORY_ITEMS = 4
+HOME_RECOMMENDATION_MAX_ITEMS_PER_CATEGORY = 6
 RECENT_CATEGORY_MAX_CATEGORIES = 2
 RECENT_CATEGORY_CANDIDATES_PER_CATEGORY = 6
 RECENT_CATEGORY_TOTAL_CANDIDATE_LIMIT = 12
@@ -253,16 +254,16 @@ def select_home_recommendation_mix(
     reranked_products: list[dict[str, Any]],
     return_limit: int = HOME_RECOMMENDATION_RETURN_LIMIT,
     max_recent_category_items: int = HOME_RECOMMENDATION_MAX_RECENT_CATEGORY_ITEMS,
+    max_items_per_category: int = HOME_RECOMMENDATION_MAX_ITEMS_PER_CATEGORY,
 ) -> list[dict[str, Any]]:
-    """Cap injected candidates while preserving stable reranked order."""
+    """Apply recent-candidate and display-category caps with stable backfill."""
     if return_limit <= 0:
         return []
 
     recent_limit = max(0, max_recent_category_items)
-    selected: list[dict[str, Any]] = []
-    skipped_recent: list[dict[str, Any]] = []
+    category_limit = max_items_per_category if max_items_per_category > 0 else None
+    unique_products: list[dict[str, Any]] = []
     seen_product_ids: set[str] = set()
-    recent_count = 0
 
     for product in reranked_products:
         product_id = product.get("id") or product.get("product_id")
@@ -272,19 +273,64 @@ def select_home_recommendation_mix(
         if product_key in seen_product_ids:
             continue
         seen_product_ids.add(product_key)
+        unique_products.append(product)
 
-        is_recent_candidate = product.get("candidate_source") == "recent_category"
-        if is_recent_candidate and recent_count >= recent_limit:
-            skipped_recent.append(product)
+    primary_candidates: list[dict[str, Any]] = []
+    recent_backfill: list[dict[str, Any]] = []
+    recent_count = 0
+    for product in unique_products:
+        if (
+            product.get("candidate_source") == "recent_category"
+            and recent_count >= recent_limit
+        ):
+            recent_backfill.append(product)
             continue
-
-        selected.append(product)
-        if is_recent_candidate:
+        primary_candidates.append(product)
+        if product.get("candidate_source") == "recent_category":
             recent_count += 1
-        if len(selected) >= return_limit:
-            return selected
 
-    for product in skipped_recent:
+    selected: list[dict[str, Any]] = []
+    category_counts: dict[str, int] = {}
+
+    def select_with_category_cap(
+        candidates: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        skipped: list[dict[str, Any]] = []
+        for product in candidates:
+            if len(selected) >= return_limit:
+                break
+            display_category = normalize_category(
+                product.get("category")
+                or product.get("category_main")
+                or product.get("recent_match_category")
+            )
+            if (
+                category_limit is not None
+                and display_category
+                and category_counts.get(display_category, 0) >= category_limit
+            ):
+                skipped.append(product)
+                continue
+            selected.append(product)
+            if display_category:
+                category_counts[display_category] = (
+                    category_counts.get(display_category, 0) + 1
+                )
+        return skipped
+
+    skipped_primary = select_with_category_cap(primary_candidates)
+    if len(selected) >= return_limit:
+        return selected
+    if len(primary_candidates) >= return_limit:
+        for product in skipped_primary:
+            selected.append(product)
+            if len(selected) >= return_limit:
+                return selected
+
+    skipped_recent = select_with_category_cap(recent_backfill)
+    if len(selected) >= return_limit:
+        return selected
+    for product in [*skipped_primary, *skipped_recent]:
         selected.append(product)
         if len(selected) >= return_limit:
             break

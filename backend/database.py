@@ -10,6 +10,7 @@ from recommendation_scoring import (
     SCORING_CONFIG,
     aggregate_category_scores,
     blend_model_candidates,
+    normalize_category,
 )
 
 DATABASE_URL = os.getenv(
@@ -207,9 +208,9 @@ def get_recent_category_candidates(
                             "category_name",
                             "category",
                         )
-                        if item.get(field_name)
+                        if normalize_category(item.get(field_name)) == recent_category
                     ),
-                    recent_category,
+                    recent_category.title(),
                 )
                 candidates.append(
                     {

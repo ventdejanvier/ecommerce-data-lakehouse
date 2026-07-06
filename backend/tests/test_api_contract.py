@@ -193,6 +193,52 @@ def test_home_mix_deduplicates_and_respects_short_limit() -> None:
     assert len(selected) <= 2
 
 
+def test_home_mix_caps_display_category_when_alternatives_exist() -> None:
+    computers = [
+        {
+            "id": f"computer-{index}",
+            "category": "Computers",
+            "reranked_score": 1.0 - index / 100,
+        }
+        for index in range(10)
+    ]
+    alternatives = [
+        {
+            "id": f"accessory-{index}",
+            "category": "Accessories",
+            "reranked_score": 0.5 - index / 100,
+        }
+        for index in range(4)
+    ]
+
+    selected = main.select_home_recommendation_mix([*computers, *alternatives])
+
+    assert len(selected) == 10
+    assert [item["id"] for item in selected[:6]] == [
+        f"computer-{index}" for index in range(6)
+    ]
+    assert [item["id"] for item in selected[6:]] == [
+        f"accessory-{index}" for index in range(4)
+    ]
+
+
+def test_home_mix_backfills_category_when_no_alternatives_exist() -> None:
+    computers = [
+        {
+            "id": f"computer-{index}",
+            "category": "Computers",
+            "reranked_score": 1.0 - index / 100,
+        }
+        for index in range(10)
+    ]
+
+    selected = main.select_home_recommendation_mix(computers)
+
+    assert [item["id"] for item in selected] == [
+        f"computer-{index}" for index in range(10)
+    ]
+
+
 def test_home_recommendations_skip_expansion_without_redis_scores(monkeypatch) -> None:
     mock_products = [
         {
