@@ -2,6 +2,7 @@
 
 import { motion } from 'framer-motion';
 import Link from 'next/link';
+import { useState } from 'react';
 import { ArrowLeft, BarChart3 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Navbar } from '@/components/navbar';
@@ -10,7 +11,18 @@ import { CartSheet } from '@/components/cart-sheet';
 import { Toaster } from '@/components/ui/toaster';
 import { TelemetryWidget } from '@/components/telemetry-widget';
 
+const BATCH_DASHBOARD_URL =
+  process.env.NEXT_PUBLIC_METABASE_BATCH_DASHBOARD_URL ||
+  'http://localhost:3001/public/dashboard/d302d4cd-0406-4cad-a520-2ed114aaedb8#theme=transparent&bordered=false&titled=false';
+
+const STREAMING_DASHBOARD_URL =
+  process.env.NEXT_PUBLIC_METABASE_STREAMING_DASHBOARD_URL ||
+  'http://localhost:3001/public/dashboard/a4c35d99-d882-459f-80fc-573f4ca42fa9#refresh=3';
+
 export default function AnalyticsPage() {
+  const [selectedDashboard, setSelectedDashboard] = useState<'batch' | 'streaming'>('batch');
+  const isBatchDashboard = selectedDashboard === 'batch';
+
   return (
     <div className="min-h-screen bg-background text-foreground">
       <Navbar />
@@ -61,6 +73,34 @@ export default function AnalyticsPage() {
           </div>
         </motion.div>
 
+        <div className="space-y-3">
+          <div className="flex flex-col gap-2 sm:flex-row" role="tablist" aria-label="Analytics dashboard">
+            <Button
+              type="button"
+              role="tab"
+              aria-selected={isBatchDashboard}
+              variant={isBatchDashboard ? 'default' : 'outline'}
+              onClick={() => setSelectedDashboard('batch')}
+            >
+              Historical analytics
+            </Button>
+            <Button
+              type="button"
+              role="tab"
+              aria-selected={!isBatchDashboard}
+              variant={!isBatchDashboard ? 'default' : 'outline'}
+              onClick={() => setSelectedDashboard('streaming')}
+            >
+              Realtime tracking
+            </Button>
+          </div>
+          <p className="text-sm text-muted-foreground">
+            {isBatchDashboard
+              ? 'Historical analytics dashboard uses batch-processed historical data from the lakehouse pipeline.'
+              : 'Realtime tracking dashboard shows near-real-time events generated from website interactions.'}
+          </p>
+        </div>
+
         {/* Dashboard View */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
@@ -69,9 +109,9 @@ export default function AnalyticsPage() {
           className="w-full min-h-[1000px] mt-6 bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl overflow-hidden relative ring-1 ring-white/5"
         >
           <iframe
-            src="http://localhost:3001/public/dashboard/d302d4cd-0406-4cad-a520-2ed114aaedb8#theme=transparent&bordered=false&titled=false"
+            src={isBatchDashboard ? BATCH_DASHBOARD_URL : STREAMING_DASHBOARD_URL}
             className="w-full h-full min-h-[1000px] border-0"
-            title="Metabase Dashboard"
+            title={isBatchDashboard ? 'Historical analytics dashboard' : 'Realtime tracking dashboard'}
           />
         </motion.div>
       </main>
