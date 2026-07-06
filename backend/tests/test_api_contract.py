@@ -139,15 +139,16 @@ def test_home_mix_caps_recent_candidates_when_models_are_available() -> None:
     selected = main.select_home_recommendation_mix([*recent, *models])
 
     assert len(selected) == 10
-    assert [item["id"] for item in selected[:4]] == [
+    assert selected[0]["id"] == "model-0"
+    assert [item["id"] for item in selected[1:5]] == [
         "recent-0",
         "recent-1",
         "recent-2",
         "recent-3",
     ]
     assert sum(item.get("candidate_source") == "recent_category" for item in selected) == 4
-    assert [item["id"] for item in selected[4:]] == [
-        f"model-{index}" for index in range(6)
+    assert [item["id"] for item in selected[5:]] == [
+        f"model-{index}" for index in range(1, 6)
     ]
     assert all("reranked_score" in item for item in selected)
 
@@ -170,7 +171,8 @@ def test_home_mix_backfills_recent_candidates_when_models_are_insufficient() -> 
 
     assert len(selected) == 10
     assert sum(item.get("candidate_source") == "recent_category" for item in selected) == 8
-    assert [item["id"] for item in selected[4:6]] == ["model-0", "model-1"]
+    assert selected[0]["id"] == "model-0"
+    assert selected[5]["id"] == "model-1"
     assert [item["id"] for item in selected[6:]] == [
         "recent-4",
         "recent-5",
@@ -191,6 +193,76 @@ def test_home_mix_deduplicates_and_respects_short_limit() -> None:
 
     assert [item.get("id") or item.get("product_id") for item in selected] == ["1", "2"]
     assert len(selected) <= 2
+
+
+def test_home_mix_places_two_low_ranked_recent_candidates_in_top_five() -> None:
+    models = [
+        {
+            "id": f"model-{index}",
+            "category": "Model Category",
+            "reranked_score": 1.0 - index / 100,
+        }
+        for index in range(10)
+    ]
+    recent = [
+        {
+            "id": f"recent-{index}",
+            "category": "Recent Category",
+            "candidate_source": "recent_category",
+            "reranked_score": 0.2 - index / 100,
+        }
+        for index in range(4)
+    ]
+
+    selected = main.select_home_recommendation_mix([*models, *recent])
+
+    assert selected[0]["id"] == "model-0"
+    assert [item["id"] for item in selected[1:3]] == ["recent-0", "recent-1"]
+    assert sum(
+        item.get("candidate_source") == "recent_category"
+        for item in selected[:5]
+    ) >= 2
+    assert selected[1]["reranked_score"] == 0.2
+    assert len({item["id"] for item in selected}) == len(selected) == 10
+
+
+def test_home_mix_places_single_recent_candidate_in_top_five() -> None:
+    products = [
+        {"id": f"model-{index}", "reranked_score": 1.0 - index / 100}
+        for index in range(10)
+    ]
+    products.append(
+        {
+            "id": "only-recent",
+            "candidate_source": "recent_category",
+            "reranked_score": 0.1,
+        }
+    )
+
+    selected = main.select_home_recommendation_mix(products)
+
+    assert selected[0]["id"] == "model-0"
+    assert selected[1]["id"] == "only-recent"
+    assert sum(
+        item.get("candidate_source") == "recent_category"
+        for item in selected[:5]
+    ) == 1
+    assert len(selected) == 10
+
+
+def test_home_mix_without_recent_candidates_preserves_reranked_order() -> None:
+    products = [
+        {
+            "id": str(index),
+            "category": f"Category {index}",
+            "reranked_score": 1.0 - index / 100,
+        }
+        for index in range(12)
+    ]
+
+    selected = main.select_home_recommendation_mix(products)
+
+    assert [item["id"] for item in selected] == [str(index) for index in range(10)]
 
 
 def test_home_mix_caps_display_category_when_alternatives_exist() -> None:

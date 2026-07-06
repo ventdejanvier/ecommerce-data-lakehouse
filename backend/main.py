@@ -275,10 +275,55 @@ def select_home_recommendation_mix(
         seen_product_ids.add(product_key)
         unique_products.append(product)
 
+    recent_candidates = [
+        product
+        for product in unique_products
+        if product.get("candidate_source") == "recent_category"
+    ]
+    model_candidates = [
+        product
+        for product in unique_products
+        if product.get("candidate_source") != "recent_category"
+    ]
+    presentation_candidates = unique_products
+    top_segment_limit = min(5, return_limit)
+    minimum_recent_count = min(
+        2,
+        recent_limit,
+        len(recent_candidates),
+        max(0, top_segment_limit - (1 if model_candidates else 0)),
+    )
+    if minimum_recent_count > 0:
+        top_segment: list[dict[str, Any]] = []
+        if model_candidates:
+            top_segment.append(model_candidates[0])
+        top_segment.extend(recent_candidates[:minimum_recent_count])
+        top_segment_ids = {
+            str(product.get("id") or product.get("product_id"))
+            for product in top_segment
+        }
+        for product in unique_products:
+            if len(top_segment) >= top_segment_limit:
+                break
+            product_key = str(product.get("id") or product.get("product_id"))
+            if product_key in top_segment_ids:
+                continue
+            top_segment.append(product)
+            top_segment_ids.add(product_key)
+        presentation_candidates = [
+            *top_segment,
+            *(
+                product
+                for product in unique_products
+                if str(product.get("id") or product.get("product_id"))
+                not in top_segment_ids
+            ),
+        ]
+
     primary_candidates: list[dict[str, Any]] = []
     recent_backfill: list[dict[str, Any]] = []
     recent_count = 0
-    for product in unique_products:
+    for product in presentation_candidates:
         if (
             product.get("candidate_source") == "recent_category"
             and recent_count >= recent_limit
