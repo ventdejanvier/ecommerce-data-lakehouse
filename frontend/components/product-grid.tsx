@@ -266,6 +266,11 @@ export function ProductGrid({
                   Active
                 </motion.span>
               )}
+              {isAiEnabled && isLoading && displayedRecommendations.length > 0 && (
+                <span className="text-xs font-medium text-muted-foreground">
+                  Refreshing...
+                </span>
+              )}
             </div>
           </div>
         </motion.div>
@@ -273,7 +278,7 @@ export function ProductGrid({
         {/* Recommendations Grid with Loading State */}
         <div className="relative">
           <AnimatePresence mode="wait">
-            {isLoading ? (
+            {isLoading && displayedRecommendations.length === 0 ? (
               <motion.div
                 key="loading"
                 initial={{ opacity: 0 }}

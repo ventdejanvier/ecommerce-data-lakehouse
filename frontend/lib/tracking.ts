@@ -2,10 +2,9 @@
 // All events are logged with timestamps and sent via fire-and-forget HTTP POST
 
 import { useAuthStore } from "./auth-store";
-import { useMLStore } from "./ml-store";
 import {
   normalizeTrackingUserId,
-  resolveTrackingUserId,
+  resolveActiveRecommendationUserId,
 } from "./tracking-identity";
 
 export type EventType =
@@ -73,37 +72,7 @@ const getSessionId = (): string => {
 
 const getActiveTrackingUserId = (
   payloadUserId: unknown,
-  sessionId: string,
 ): string => {
-  let selectedPersonaUserId: string | null = null;
-  try {
-    const mlState = useMLStore.getState() as {
-      isAiEnabled?: boolean;
-      isMLEnabled?: boolean;
-      userId?: unknown;
-      mlUserId?: unknown;
-      activeUserId?: unknown;
-      selectedUserId?: unknown;
-      selectedPersonaId?: unknown;
-      persona?: { id?: unknown; userId?: unknown } | null;
-      user?: { id?: unknown; userId?: unknown } | null;
-    };
-
-    if (mlState.isAiEnabled || mlState.isMLEnabled) {
-      selectedPersonaUserId =
-        normalizeTrackingUserId(mlState.userId) ??
-        normalizeTrackingUserId(mlState.mlUserId) ??
-        normalizeTrackingUserId(mlState.activeUserId) ??
-        normalizeTrackingUserId(mlState.selectedUserId) ??
-        normalizeTrackingUserId(mlState.persona?.userId) ??
-        normalizeTrackingUserId(mlState.persona?.id) ??
-        normalizeTrackingUserId(mlState.user?.userId) ??
-        normalizeTrackingUserId(mlState.user?.id);
-    }
-  } catch (error) {
-    console.warn("[DataLakehouse] Unable to resolve ML tracking user:", error);
-  }
-
   let authenticatedUserId: string | null = null;
   try {
     authenticatedUserId = normalizeTrackingUserId(useAuthStore.getState().user?.id);
@@ -111,11 +80,11 @@ const getActiveTrackingUserId = (
     console.warn("[DataLakehouse] Unable to resolve auth tracking user:", error);
   }
 
-  return resolveTrackingUserId({
+  return resolveActiveRecommendationUserId({
     explicitUserId: payloadUserId,
-    selectedPersonaUserId,
+    // Demo persona selection is represented by the authenticated user store.
+    selectedPersonaUserId: null,
     authenticatedUserId,
-    sessionId,
   });
 };
 
@@ -138,7 +107,7 @@ const getEventCategory = (payload: EventPayload): string | null => {
  */
 export function logEvent(type: EventType, payload: EventPayload = {}): void {
   const sessionId = getSessionId();
-  const userId = getActiveTrackingUserId(payload.userId, sessionId);
+  const userId = getActiveTrackingUserId(payload.userId);
   const eventCategory = getEventCategory(payload);
   const categoryFields =
     type === "product_click" || type === "product_view"
@@ -163,6 +132,14 @@ export function logEvent(type: EventType, payload: EventPayload = {}): void {
       referrer: typeof window !== "undefined" ? document.referrer : "",
     },
   };
+
+  if (process.env.NODE_ENV === "development") {
+    console.debug("[Recommendations] Tracking identity", {
+      eventType: type,
+      trackingUserId: userId,
+      sessionId,
+    });
+  }
 
   // Log to console for local debugging
   console.log(`[DataLakehouse] Event: ${type}`, enrichedPayload);

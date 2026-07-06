@@ -16,6 +16,7 @@ import { Separator } from '@/components/ui/separator';
 import { Skeleton } from '@/components/ui/skeleton';
 import { useCartStore } from '@/lib/cart-store';
 import { logEvent } from '@/lib/tracking';
+import { scheduleRecommendationRefresh } from '@/lib/ml-store';
 import { useToast } from '@/hooks/use-toast';
 import { getLocalFallbackUrl } from '@/utils/image-fallback';
 import type { Product } from '@/components/product-card';
@@ -208,6 +209,7 @@ export function CartSheet() {
       action: 'remove',
       timestamp: new Date().toISOString(),
     });
+    scheduleRecommendationRefresh('cart_remove');
   };
 
   const handleAddRecommendation = (product: Product) => {
@@ -222,6 +224,7 @@ export function CartSheet() {
       cartAction: 'add',
       source: 'frequently_bought_together',
     });
+    scheduleRecommendationRefresh('add_to_cart');
   };
 
   const handleCheckout = async () => {
@@ -262,6 +265,7 @@ export function CartSheet() {
       })),
       timestamp: new Date().toISOString(),
     });
+    scheduleRecommendationRefresh('purchase_completed');
 
     // Clear cart and close
     clearCart();

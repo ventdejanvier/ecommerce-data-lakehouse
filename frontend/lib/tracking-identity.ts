@@ -7,28 +7,23 @@ export const normalizeTrackingUserId = (value: unknown): string | null => {
   return normalizedValue.length > 0 ? normalizedValue : null;
 };
 
-interface TrackingIdentityCandidates {
+export const DEFAULT_RECOMMENDATION_USER_ID = "1515915625355805313";
+
+interface ActiveRecommendationIdentityCandidates {
   explicitUserId: unknown;
   selectedPersonaUserId: unknown;
   authenticatedUserId: unknown;
-  sessionId: unknown;
 }
 
-export const resolveTrackingUserId = ({
+export const resolveActiveRecommendationUserId = ({
   explicitUserId,
   selectedPersonaUserId,
   authenticatedUserId,
-  sessionId,
-}: TrackingIdentityCandidates): string => {
+}: ActiveRecommendationIdentityCandidates): string => {
   const resolvedUserId =
     normalizeTrackingUserId(explicitUserId) ??
     normalizeTrackingUserId(selectedPersonaUserId) ??
     normalizeTrackingUserId(authenticatedUserId);
 
-  if (resolvedUserId) {
-    return resolvedUserId;
-  }
-
-  const resolvedSessionId = normalizeTrackingUserId(sessionId) ?? "server_session";
-  return `guest:${resolvedSessionId}`;
+  return resolvedUserId ?? DEFAULT_RECOMMENDATION_USER_ID;
 };

@@ -3,6 +3,14 @@
 import { create } from 'zustand';
 import { useAuthStore } from './auth-store';
 import { logEvent } from './tracking';
+import { resolveActiveRecommendationUserId } from './tracking-identity';
+
+const BACKEND_API_BASE_URL = (
+  process.env.NEXT_PUBLIC_BACKEND_API_URL ?? 'http://localhost:8000'
+).replace(/\/$/, '');
+
+const RECOMMENDATION_CACHE_TTL_MS = 20_000;
+const RECOMMENDATION_REFRESH_DEBOUNCE_MS = 300;
 
 export interface AIRecommendation {
   id: string;
@@ -59,18 +67,15 @@ export const useMLStore = create<MLState>((set, get) => ({
     if (strategy !== previousStrategy) {
       set({ mlStrategy: strategy });
 
-      // Explicitly log the strategy change to fix N/A telemetry issues
       logEvent('ML_STRATEGY_CHANGE', {
-        strategy: strategy,
-        previousStrategy: previousStrategy,
+        strategy,
+        previousStrategy,
         context: 'strategy_dropdown',
-        timestamp: new Date().toISOString()
+        timestamp: new Date().toISOString(),
       });
 
-      // Auto-fetch new recommendations when strategy changes
-      const isAiEnabled = get().isAiEnabled;
-      if (isAiEnabled) {
-        void fetchRecommendations(null, true);
+      if (get().isAiEnabled) {
+        void fetchRecommendations(null, true, { reason: 'strategy_change' });
       }
     }
   },
@@ -106,48 +111,180 @@ export const useMLStore = create<MLState>((set, get) => ({
   },
 }));
 
+interface FetchRecommendationOptions {
+  forceRefresh?: boolean;
+  reason?: string;
+}
+
+interface RecommendationCacheEntry {
+  data: AIRecommendation[];
+  expiresAt: number;
+}
+
 let currentFetchController: AbortController | null = null;
+let currentFetchKey: string | null = null;
+let latestRequestedKey: string | null = null;
+let recommendationRefreshTimer: ReturnType<typeof setTimeout> | null = null;
+const recommendationCache = new Map<string, RecommendationCacheEntry>();
+const inFlightRecommendationRequests = new Map<string, Promise<AIRecommendation[]>>();
+
+const debugRecommendations = (
+  message: string,
+  details: Record<string, unknown>,
+) => {
+  if (process.env.NODE_ENV === 'development') {
+    console.debug(`[Recommendations] ${message}`, details);
+  }
+};
+
+export const getActiveRecommendationUserId = (
+  explicitUserId: string | null = null,
+): string => {
+  const authenticatedUserId = useAuthStore.getState().user?.id ?? null;
+  return resolveActiveRecommendationUserId({
+    explicitUserId,
+    // Demo persona selection is represented by the authenticated user store.
+    selectedPersonaUserId: null,
+    authenticatedUserId,
+  });
+};
+
+const getRecommendationCacheKey = (
+  userId: string,
+  strategy: string,
+  isAiEnabled: boolean,
+) => `${userId}::${strategy}::${String(isAiEnabled)}`;
 
 export const fetchRecommendations = async (
   userId: string | null,
-  isAiEnabled: boolean
-) => {
+  isAiEnabled: boolean,
+  options: FetchRecommendationOptions = {},
+): Promise<AIRecommendation[]> => {
   const { mlStrategy, setRecommendations, setLoading } = useMLStore.getState();
-  setLoading(true);
-  setRecommendations([]);
+  const activeUserId = getActiveRecommendationUserId(userId);
+  const cacheKey = getRecommendationCacheKey(activeUserId, mlStrategy, isAiEnabled);
+  const cachedEntry = recommendationCache.get(cacheKey);
+  latestRequestedKey = cacheKey;
+
+  debugRecommendations('Request resolved', {
+    activeRecommendationUserId: activeUserId,
+    isMLEnabled: isAiEnabled,
+    strategy: mlStrategy,
+    reason: options.reason ?? 'direct',
+  });
+
+  if (!options.forceRefresh && cachedEntry && cachedEntry.expiresAt > Date.now()) {
+    if (currentFetchKey !== cacheKey) {
+      currentFetchController?.abort();
+    }
+    setRecommendations(cachedEntry.data);
+    setLoading(false);
+    debugRecommendations('Using cached response', { cacheKey });
+    return cachedEntry.data;
+  }
+
+  const existingRequest = inFlightRecommendationRequests.get(cacheKey);
+  if (!options.forceRefresh && existingRequest) {
+    setLoading(true);
+    debugRecommendations('Reusing in-flight response', { cacheKey });
+    try {
+      const data = await existingRequest;
+      if (
+        inFlightRecommendationRequests.get(cacheKey) === existingRequest &&
+        latestRequestedKey === cacheKey
+      ) {
+        setRecommendations(data);
+        setLoading(false);
+      }
+      return data;
+    } catch (error) {
+      if (!(error instanceof Error && error.name === 'AbortError')) {
+        console.error('Recommendation request failed:', error);
+      }
+      if (
+        inFlightRecommendationRequests.get(cacheKey) === existingRequest &&
+        latestRequestedKey === cacheKey
+      ) {
+        setLoading(false);
+      }
+      return useMLStore.getState().aiRecommendations;
+    }
+  }
 
   currentFetchController?.abort();
   const controller = new AbortController();
   currentFetchController = controller;
+  currentFetchKey = cacheKey;
+  setLoading(true);
 
-  try {
-    const activeUserId = userId || useAuthStore.getState().user?.id || '1515915625355805313';
-    const endpoint = `http://localhost:8000/api/recommend/home/${encodeURIComponent(activeUserId)}?is_ml_enabled=${String(Boolean(isAiEnabled))}&strategy=${encodeURIComponent(mlStrategy)}`;
-
+  const endpoint = `${BACKEND_API_BASE_URL}/api/recommend/home/${encodeURIComponent(activeUserId)}?is_ml_enabled=${String(Boolean(isAiEnabled))}&strategy=${encodeURIComponent(mlStrategy)}`;
+  const request = (async () => {
     const response = await fetch(endpoint, {
       cache: 'no-store',
       signal: controller.signal,
     });
     if (!response.ok) {
-      console.warn("Lỗi API, hiển thị mảng rỗng");
-      if (currentFetchController === controller) {
-        setRecommendations([]);
-      }
-      return;
+      throw new Error(`Recommendation API failed with status ${response.status}`);
     }
-    const data: AIRecommendation[] = await response.json();
-    if (currentFetchController === controller) {
+    return (await response.json()) as AIRecommendation[];
+  })();
+  inFlightRecommendationRequests.set(cacheKey, request);
+
+  try {
+    const data = await request;
+    recommendationCache.set(cacheKey, {
+      data,
+      expiresAt: Date.now() + RECOMMENDATION_CACHE_TTL_MS,
+    });
+    if (currentFetchController === controller && latestRequestedKey === cacheKey) {
       setRecommendations(data);
     }
+    return data;
   } catch (error) {
-    if (error instanceof Error && error.name === 'AbortError') return;
-    console.error('Lỗi:', error);
-    if (currentFetchController === controller) {
-      setRecommendations([]);
+    if (!(error instanceof Error && error.name === 'AbortError')) {
+      console.error('Recommendation request failed:', error);
     }
+    return useMLStore.getState().aiRecommendations;
   } finally {
+    if (inFlightRecommendationRequests.get(cacheKey) === request) {
+      inFlightRecommendationRequests.delete(cacheKey);
+    }
     if (currentFetchController === controller) {
-      setLoading(false);
+      currentFetchController = null;
+      currentFetchKey = null;
+      if (latestRequestedKey === cacheKey) {
+        setLoading(false);
+      }
     }
   }
+};
+
+export const scheduleRecommendationRefresh = (reason = 'eligible_interaction') => {
+  if (typeof window === 'undefined') {
+    return;
+  }
+
+  if (recommendationRefreshTimer) {
+    clearTimeout(recommendationRefreshTimer);
+  }
+
+  const { isAiEnabled, mlStrategy } = useMLStore.getState();
+  const activeUserId = getActiveRecommendationUserId();
+  debugRecommendations('Debounced refresh scheduled', {
+    reason,
+    delayMs: RECOMMENDATION_REFRESH_DEBOUNCE_MS,
+    activeRecommendationUserId: activeUserId,
+    isMLEnabled: isAiEnabled,
+    strategy: mlStrategy,
+  });
+
+  recommendationRefreshTimer = setTimeout(() => {
+    recommendationRefreshTimer = null;
+    const currentState = useMLStore.getState();
+    const currentUserId = getActiveRecommendationUserId();
+    void fetchRecommendations(currentUserId, currentState.isAiEnabled, {
+      forceRefresh: true,
+      reason,
+    });
+  }, RECOMMENDATION_REFRESH_DEBOUNCE_MS);
 };

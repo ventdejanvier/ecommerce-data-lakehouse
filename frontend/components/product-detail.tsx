@@ -10,6 +10,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { ArrowLeft, ShoppingCart, Heart, Share2, Star, Truck, Shield, RotateCcw } from 'lucide-react';
 import { logEvent } from '@/lib/tracking';
 import { useCartStore } from '@/lib/cart-store';
+import { scheduleRecommendationRefresh } from '@/lib/ml-store';
 import { Product, ProductCard } from './product-card';
 import { getLocalFallbackUrl } from '@/utils/image-fallback';
 
@@ -59,6 +60,7 @@ export function ProductDetail({ product, onBack, onAddToCart, onProductClick }: 
       productRating: product.rating,
       viewDuration: 0,
     });
+    scheduleRecommendationRefresh('product_view');
   }, [product]);
 
   useEffect(() => {
@@ -155,6 +157,7 @@ export function ProductDetail({ product, onBack, onAddToCart, onProductClick }: 
       action: 'add',
       timestamp: new Date().toISOString(),
     });
+    scheduleRecommendationRefresh('add_to_cart');
 
     // Open cart sheet
     openCart();

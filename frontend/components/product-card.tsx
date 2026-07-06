@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/badge';
 import { ShoppingCart, Star, TrendingUp } from 'lucide-react';
 import { logEvent } from '@/lib/tracking';
 import { useCartStore } from '@/lib/cart-store';
+import { scheduleRecommendationRefresh } from '@/lib/ml-store';
 import { getLocalFallbackUrl } from '@/utils/image-fallback';
 
 export interface Product {
@@ -52,6 +53,7 @@ export function ProductCard({
       productRating: product.rating,
       inStock: product.inStock,
     });
+    scheduleRecommendationRefresh('product_click');
     onProductClick?.(product);
   };
 
@@ -80,6 +82,7 @@ export function ProductCard({
       action: 'add',
       timestamp: new Date().toISOString(),
     });
+    scheduleRecommendationRefresh('add_to_cart');
 
     // Open cart sheet
     openCart();
