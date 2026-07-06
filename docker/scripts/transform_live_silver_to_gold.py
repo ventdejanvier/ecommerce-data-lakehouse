@@ -30,6 +30,7 @@ REQUIRED_COLS = {
     "user_id",
     "session_id",
     "product_price",
+    "raw_json",
 }
 CANONICAL_COLS = (
     "event_id",
@@ -39,6 +40,7 @@ CANONICAL_COLS = (
     "user_id",
     "session_id",
     "product_price",
+    "action",
 )
 
 
@@ -108,7 +110,12 @@ def transform_live_gold():
         if input_row_count == 0:
             _handle_unavailable_source()
 
-        deduped_df = df_live.select(
+        df_with_action = df_live.withColumn(
+            "action",
+            F.lower(F.get_json_object(F.col("raw_json"), "$.action"))
+        )
+
+        deduped_df = df_with_action.select(
             *(F.col(column_name) for column_name in CANONICAL_COLS)
         ).dropDuplicates(["event_id"])
         deduplicated_row_count = deduped_df.count()
