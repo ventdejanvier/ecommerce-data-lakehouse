@@ -294,9 +294,12 @@ def select_home_recommendation_mix(
 
 @app.post("/api/track")
 def track_event(data: dict[str, Any], background_tasks: BackgroundTasks) -> dict[str, str]:
-    # Đẩy tác vụ gửi vào Kafka ra background để API phản hồi ngay.
     event_data = dict(data)
-    background_tasks.add_task(capture_recent_category, event_data)
+
+    # Recommendation refreshes need the Redis signal before this request returns.
+    capture_recent_category(event_data)
+
+    # Kafka delivery is not required for the immediate recommendation response.
     background_tasks.add_task(send_to_kafka_background, event_data)
     return {"status": "ok", "eventId": str(event_data.get("eventId", ""))}
 

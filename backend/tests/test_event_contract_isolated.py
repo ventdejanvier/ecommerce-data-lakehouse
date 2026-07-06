@@ -12,9 +12,16 @@ import main  # noqa: E402
 from recommendation_scoring import RecommendationScoringConfig  # noqa: E402
 
 
-class ImmediateBackgroundTasks:
+class RecordingBackgroundTasks:
+    def __init__(self) -> None:
+        self.tasks = []
+
     def add_task(self, function, *args, **kwargs) -> None:
-        function(*args, **kwargs)
+        self.tasks.append((function, args, kwargs))
+
+    def run(self) -> None:
+        for function, args, kwargs in self.tasks:
+            function(*args, **kwargs)
 
 
 def capture_category_updates(monkeypatch, payload: dict[str, object]):
@@ -111,7 +118,7 @@ def test_cart_remove_prefers_category_main(monkeypatch) -> None:
     assert captured == [("USER_001", "electronics", -5.0)]
 
 
-def test_track_handler_uses_mocked_redis_and_kafka(monkeypatch) -> None:
+def test_track_handler_updates_redis_synchronously_and_queues_kafka(monkeypatch) -> None:
     produced_events = []
     redis_updates = []
     monkeypatch.setattr(
@@ -134,13 +141,21 @@ def test_track_handler_uses_mocked_redis_and_kafka(monkeypatch) -> None:
         ],
     }
 
-    response = main.track_event(payload, ImmediateBackgroundTasks())
+    background_tasks = RecordingBackgroundTasks()
+    response = main.track_event(payload, background_tasks)
 
     assert response == {"status": "ok", "eventId": "purchase_001"}
     assert redis_updates == [
         ("USER_001", "electronics", 10.0),
         ("USER_001", "books", 10.0),
     ]
+    assert produced_events == []
+    assert background_tasks.tasks == [
+        (main.send_to_kafka_background, (payload,), {}),
+    ]
+
+    background_tasks.run()
+
     assert produced_events == [("ecommerce-raw-events", payload)]
 
 
@@ -163,9 +178,17 @@ def test_track_handler_reaches_kafka_when_redis_fails(monkeypatch) -> None:
         "items": [{"productCategory": "Electronics"}],
     }
 
-    response = main.track_event(payload, ImmediateBackgroundTasks())
+    background_tasks = RecordingBackgroundTasks()
+    response = main.track_event(payload, background_tasks)
 
     assert response == {"status": "ok", "eventId": "purchase_redis_failure"}
+    assert produced_events == []
+    assert background_tasks.tasks == [
+        (main.send_to_kafka_background, (payload,), {}),
+    ]
+
+    background_tasks.run()
+
     assert produced_events == [("ecommerce-raw-events", payload)]
 
 
