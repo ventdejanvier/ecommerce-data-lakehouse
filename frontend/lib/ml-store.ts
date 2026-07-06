@@ -218,6 +218,8 @@ export const fetchRecommendations = async (
   setLoading(true);
 
   const endpoint = `${BACKEND_API_BASE_URL}/api/recommend/home/${encodeURIComponent(activeUserId)}?is_ml_enabled=${String(Boolean(isAiEnabled))}&strategy=${encodeURIComponent(mlStrategy)}`;
+  const requestStartedAt = Date.now();
+  debugRecommendations('Fetch started', { cacheKey, reason: options.reason ?? 'direct' });
   const request = (async () => {
     const response = await fetch(endpoint, {
       cache: 'no-store',
@@ -246,6 +248,11 @@ export const fetchRecommendations = async (
     }
     return useMLStore.getState().aiRecommendations;
   } finally {
+    debugRecommendations('Fetch finished', {
+      cacheKey,
+      durationMs: Date.now() - requestStartedAt,
+      superseded: currentFetchController !== controller,
+    });
     if (inFlightRecommendationRequests.get(cacheKey) === request) {
       inFlightRecommendationRequests.delete(cacheKey);
     }

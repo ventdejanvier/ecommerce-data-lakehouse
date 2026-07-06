@@ -36,6 +36,48 @@ interface SimilarProductResponse {
   cluster_total_score?: number;
 }
 
+const SIMILAR_PRODUCTS_CACHE_TTL_MS = 120_000;
+const similarProductsCache = new Map<
+  string,
+  { data: Product[]; expiresAt: number }
+>();
+const similarProductsInFlight = new Map<string, Promise<Product[]>>();
+
+const debugSimilarProducts = (
+  message: string,
+  details: Record<string, unknown>,
+) => {
+  if (process.env.NODE_ENV === 'development') {
+    console.debug(`[Similar Products] ${message}`, details);
+  }
+};
+
+const mapSimilarProduct = (
+  item: SimilarProductResponse,
+  sourceProductId: string,
+): Product | null => {
+  const rawId = item.id ?? item.product_id;
+  if (rawId === undefined || rawId === null) {
+    return null;
+  }
+
+  const id = String(rawId);
+  if (id === sourceProductId) {
+    return null;
+  }
+
+  const score = Number(item.cluster_total_score ?? 1);
+  return {
+    id,
+    name: String(item.name ?? item.display_name ?? `Product ${id}`),
+    price: Number(item.price ?? 0),
+    rating: 4.5,
+    reviewCount: Math.max(1, Math.round(score)),
+    category: String(item.category ?? item.category_name ?? 'Recommended'),
+    inStock: true,
+  };
+};
+
 export function ProductDetail({ product, onBack, onAddToCart, onProductClick }: ProductDetailProps) {
   const { addItem, openCart } = useCartStore();
   const [similarProducts, setSimilarProducts] = useState<Product[]>([]);
@@ -60,50 +102,67 @@ export function ProductDetail({ product, onBack, onAddToCart, onProductClick }: 
       productRating: product.rating,
       viewDuration: 0,
     });
-    scheduleRecommendationRefresh('product_view');
   }, [product]);
 
   useEffect(() => {
     let isMounted = true;
-
-    const mapSimilarProduct = (item: SimilarProductResponse): Product | null => {
-      const rawId = item.id ?? item.product_id;
-      if (rawId === undefined || rawId === null) {
-        return null;
-      }
-
-      const id = String(rawId);
-      const score = Number(item.cluster_total_score ?? 1);
-
-      return {
-        id,
-        name: String(item.name ?? item.display_name ?? `Product ${id}`),
-        price: Number(item.price ?? 0),
-        rating: 4.5,
-        reviewCount: Math.max(1, Math.round(score)),
-        category: String(item.category ?? item.category_name ?? 'Recommended'),
-        inStock: true,
-      };
-    };
+    const productId = product.id;
 
     const fetchSimilarProducts = async () => {
+      const cachedEntry = similarProductsCache.get(productId);
+      if (cachedEntry && cachedEntry.expiresAt > Date.now()) {
+        debugSimilarProducts('Cache hit', { productId });
+        setSimilarProducts(cachedEntry.data);
+        setIsLoadingSimilar(false);
+        return;
+      }
+
+      if (cachedEntry) {
+        similarProductsCache.delete(productId);
+      }
+
+      let request = similarProductsInFlight.get(productId);
+      if (request) {
+        debugSimilarProducts('Reusing in-flight request', { productId });
+      } else {
+        debugSimilarProducts('Cache miss', { productId });
+        const startedAt = Date.now();
+        request = (async () => {
+          debugSimilarProducts('Fetch started', { productId });
+          try {
+            const response = await fetch(
+              `${BACKEND_API_BASE_URL}/api/recommend/product/${encodeURIComponent(productId)}`,
+              { cache: 'no-store' }
+            );
+            if (!response.ok) {
+              throw new Error(`Failed to fetch similar products: ${response.status}`);
+            }
+
+            const data = (await response.json()) as SimilarProductResponse[];
+            const mappedProducts = data
+              .map((item) => mapSimilarProduct(item, productId))
+              .filter((item): item is Product => item !== null);
+            similarProductsCache.set(productId, {
+              data: mappedProducts,
+              expiresAt: Date.now() + SIMILAR_PRODUCTS_CACHE_TTL_MS,
+            });
+            return mappedProducts;
+          } finally {
+            similarProductsInFlight.delete(productId);
+            debugSimilarProducts('Fetch finished', {
+              productId,
+              durationMs: Date.now() - startedAt,
+            });
+          }
+        })();
+        similarProductsInFlight.set(productId, request);
+      }
+
       setIsLoadingSimilar(true);
       try {
-        const response = await fetch(
-          `${BACKEND_API_BASE_URL}/api/recommend/product/${encodeURIComponent(product.id)}`,
-          { cache: 'no-store' }
-        );
-        if (!response.ok) {
-          throw new Error(`Failed to fetch similar products: ${response.status}`);
-        }
-
-        const data = (await response.json()) as SimilarProductResponse[];
+        const data = await request;
         if (isMounted) {
-          setSimilarProducts(
-            data
-              .map(mapSimilarProduct)
-              .filter((item): item is Product => item !== null && item.id !== product.id)
-          );
+          setSimilarProducts(data);
         }
       } catch (error) {
         console.error('Failed to fetch similar products:', error);
