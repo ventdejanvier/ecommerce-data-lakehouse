@@ -2,7 +2,7 @@
 
 import { motion } from 'framer-motion';
 import Link from 'next/link';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { ArrowLeft, BarChart3 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Navbar } from '@/components/navbar';
@@ -19,9 +19,48 @@ const STREAMING_DASHBOARD_URL =
   process.env.NEXT_PUBLIC_METABASE_STREAMING_DASHBOARD_URL ||
   'http://localhost:3001/public/dashboard/a4c35d99-d882-459f-80fc-573f4ca42fa9#refresh=3';
 
+// Quote URLs containing "#" in .env so the refresh fragment is preserved, for example:
+// NEXT_PUBLIC_METABASE_STREAMING_DASHBOARD_URL="http://localhost:3001/public/dashboard/a4c35d99-d882-459f-80fc-573f4ca42fa9#refresh=3"
+const DEFAULT_STREAMING_IFRAME_REFRESH_MS = 10_000;
+const MIN_STREAMING_IFRAME_REFRESH_MS = 3_000;
+const configuredStreamingRefreshMs = Number(
+  process.env.NEXT_PUBLIC_METABASE_STREAMING_IFRAME_REFRESH_MS
+);
+const STREAMING_IFRAME_REFRESH_MS =
+  Number.isFinite(configuredStreamingRefreshMs) &&
+  configuredStreamingRefreshMs >= MIN_STREAMING_IFRAME_REFRESH_MS
+    ? Math.floor(configuredStreamingRefreshMs)
+    : DEFAULT_STREAMING_IFRAME_REFRESH_MS;
+
+function appendIframeRefreshNonce(url: string, nonce: number): string {
+  if (nonce <= 0) return url;
+
+  const hashIndex = url.indexOf('#');
+  const baseUrl = hashIndex >= 0 ? url.slice(0, hashIndex) : url;
+  const hash = hashIndex >= 0 ? url.slice(hashIndex) : '';
+  const separator = baseUrl.includes('?') ? '&' : '?';
+
+  return `${baseUrl}${separator}iframe_refresh=${nonce}${hash}`;
+}
+
 export default function AnalyticsPage() {
   const [selectedDashboard, setSelectedDashboard] = useState<'batch' | 'streaming'>('batch');
+  const [streamingRefreshNonce, setStreamingRefreshNonce] = useState(0);
   const isBatchDashboard = selectedDashboard === 'batch';
+  const streamingIframeUrl = appendIframeRefreshNonce(
+    STREAMING_DASHBOARD_URL,
+    streamingRefreshNonce
+  );
+
+  useEffect(() => {
+    if (selectedDashboard !== 'streaming') return;
+
+    const intervalId = window.setInterval(() => {
+      setStreamingRefreshNonce((currentNonce) => currentNonce + 1);
+    }, STREAMING_IFRAME_REFRESH_MS);
+
+    return () => window.clearInterval(intervalId);
+  }, [selectedDashboard]);
 
   return (
     <div className="min-h-screen bg-background text-foreground">
@@ -99,6 +138,11 @@ export default function AnalyticsPage() {
               ? 'Historical analytics dashboard uses batch-processed historical data from the lakehouse pipeline.'
               : 'Realtime tracking dashboard shows near-real-time events generated from website interactions.'}
           </p>
+          {!isBatchDashboard && (
+            <p className="text-xs text-muted-foreground">
+              Embedded view refreshes automatically during demo.
+            </p>
+          )}
         </div>
 
         {/* Dashboard View */}
@@ -109,7 +153,7 @@ export default function AnalyticsPage() {
           className="w-full min-h-[1000px] mt-6 bg-card/50 backdrop-blur-xl border border-border/50 rounded-xl shadow-2xl overflow-hidden relative ring-1 ring-white/5"
         >
           <iframe
-            src={isBatchDashboard ? BATCH_DASHBOARD_URL : STREAMING_DASHBOARD_URL}
+            src={isBatchDashboard ? BATCH_DASHBOARD_URL : streamingIframeUrl}
             className="w-full h-full min-h-[1000px] border-0"
             title={isBatchDashboard ? 'Historical analytics dashboard' : 'Realtime tracking dashboard'}
           />
