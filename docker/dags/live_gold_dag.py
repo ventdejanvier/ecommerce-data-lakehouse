@@ -14,7 +14,7 @@ default_args = {
 with DAG(
     "live_gold_dag",
     default_args=default_args,
-    schedule_interval="*/5 * * * *",
+    schedule_interval="*/1 * * * *",
     catchup=False,
     max_active_runs=1,
     is_paused_upon_creation=False,
