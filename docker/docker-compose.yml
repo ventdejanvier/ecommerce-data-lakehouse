@@ -1,7 +1,7 @@
 services:
   # --- STORAGE LAYER ---
   minio:
-    image: public.ecr.aws/bitnami/minio:latest
+    image: soldevelo/minio:latest
     container_name: minio
     ports:
       - "9000:9000"
@@ -35,13 +35,13 @@ services:
 
   # --- STREAMING LAYER ---
   zookeeper:
-    image: public.ecr.aws/bitnami/zookeeper:3.8
+    image: soldevelo/zookeeper:3.8
     container_name: zookeeper
     environment:
       - ALLOW_ANONYMOUS_LOGIN=yes
 
   kafka:
-    image: public.ecr.aws/bitnami/kafka:3.3
+    image: soldevelo/kafka:3.3
     container_name: kafka
     depends_on:
       - zookeeper
